@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Bot — Live Dashboard</title>
+
+  <!-- Supabase JS (no npm needed) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- Lightweight chart library -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0a0f;
+      --surface:  #111827;
+      --border:   #1e293b;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --dimmer:   #334155;
+      --green:    #22c55e;
+      --red:      #ef4444;
+      --amber:    #f59e0b;
+      --blue:     #6366f1;
+      --teal:     #14b8a6;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; }
+    .header .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .live-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+      margin-right: 6px;
+      transition: background 0.3s;
+    }
+    .live-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .live-label { font-size: 12px; color: #94a3b8; }
+
+    /* ── Stats row ── */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+    .stat .value { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+    .stat .hint  { font-size: 11px; color: #475569; margin-top: 3px; }
+
+    /* ── Grid ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .grid-2b { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .card-title { font-size: 13px; font-weight: 500; color: #cbd5e1; margin-bottom: 14px; }
+
+    /* ── Signal votes ── */
+    .votes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+    .vote {
+      background: #0f172a;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .vote .vlabel { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+    .vote .vval   { font-size: 14px; font-weight: 600; }
+
+    /* ── Trade row ── */
+    .trade-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      animation: fadeIn 0.4s ease;
+    }
+    .badge {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-yes { background: #14532d; color: #86efac; }
+    .badge-no  { background: #450a0a; color: #fca5a5; }
+    .badge-pending  { background: #1e3a5f; color: #93c5fd; }
+    .badge-filled   { background: #14532d; color: #86efac; }
+    .badge-failed   { background: #450a0a; color: #fca5a5; }
+    .badge-cancelled{ background: #2d2011; color: #fcd34d; }
+
+    /* ── Agent row ── */
+    .agent-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .agent-name { font-size: 12px; color: #cbd5e1; }
+    .agent-task { font-size: 10px; color: #475569; }
+    .agent-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #0f172a;
+    }
+
+    /* ── Alert ── */
+    .alert-item { margin-bottom: 8px; font-size: 11px; }
+    .alert-dot { margin-right: 5px; }
+    .alert-msg  { color: #94a3b8; }
+    .alert-time { color: var(--dimmer); margin-left: 14px; }
+
+    /* ── Misc ── */
+    .empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+    .scroll { overflow-y: auto; max-height: 260px; }
+    .scroll-sm { overflow-y: auto; max-height: 130px; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .grid-2, .grid-2b { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── CONFIG: replace these two values ── -->
+<script>
+  const SUPABASE_URL = 'https://jkoxrftlslylfmugjomd.supabase.co'
+  const SUPABASE_ANON_KEY = 'sb_publishable_aLhbusq3yeSgr32VykZp2Q_W9juPt-w'
+</script>
+
+<!-- ── HTML ── -->
+<div class="header">
+  <div>
+    <h1>Polymarket Bot</h1>
+    <div class="sub">BTC 5-min Signal Engine</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px;">
+    <div><span class="live-dot" id="dot"></span><span class="live-label" id="liveLabel">Connecting...</span></div>
+    <div style="font-size:11px;color:#475569;" id="lastUpdate">—</div>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="stats">
+  <div class="stat">
+    <div class="label">Bankroll</div>
+    <div class="value" id="bankroll">$—</div>
+    <div class="hint" id="bankrollHint">started $30.00</div>
+  </div>
+  <div class="stat">
+    <div class="label">Total P&L</div>
+    <div class="value" id="totalPnl">$—</div>
+  </div>
+  <div class="stat">
+    <div class="label">Win Rate</div>
+    <div class="value" id="winRate">—%</div>
+    <div class="hint" id="winRateHint">0/0 trades</div>
+  </div>
+  <div class="stat">
+    <div class="label">Streak</div>
+    <div class="value" id="streak">—</div>
+    <div class="hint" id="botStatus">Initialising</div>
+  </div>
+</div>
+
+<!-- Row 1: P&L chart + signal breakdown -->
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Cumulative P&L</div>
+    <canvas id="pnlChart" height="160"></canvas>
+    <div class="empty" id="chartEmpty" style="display:none;">Waiting for first resolved trade...</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Latest Signal</div>
+    <div id="signalPanel"><div class="empty">No signals yet...</div></div>
+  </div>
+</div>
+
+<!-- Row 2: trades + agents + alerts -->
+<div class="grid-2b">
+  <div class="card">
+    <div class="card-title">Live Trades</div>
+    <div class="scroll" id="tradesList"><div class="empty">No trades yet...</div></div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px;">
+    <div class="card">
+      <div class="card-title">Agents</div>
+      <div id="agentsList"><div class="empty">—</div></div>
+    </div>
+    <div class="card" style="flex:1;">
+      <div class="card-title">Alerts</div>
+      <div class="scroll-sm" id="alertsList"><div class="empty">No alerts</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── JS ── -->
+<script>
+// ── Init Supabase ──────────────────────────────────────────────
+const { createClient } = supabase
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+// ── State ──────────────────────────────────────────────────────
+let pnlChart = null
+let pnlHistory = []   // {t, cumPnl}
+let trades = []
+let signals = []
+let alerts = []
+let agents = []
+let botState = null
+
+// ── Helpers ────────────────────────────────────────────────────
+const $ = id => document.getElementById(id)
+const fmt = (n, d=2) => (n ?? 0).toFixed(d)
+const fmtTime = ts => new Date(ts).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
+const timeAgo = ts => {
+  const s = Math.floor((Date.now() - new Date(ts)) / 1000)
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s/60)}m ago`
+  return `${Math.floor(s/3600)}h ago`
+}
+
+function pnlCol(v) {
+  return v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)'
+}
+function statusCol(s) {
+  if (s === 'running') return 'var(--green)'
+  if (s === 'error')   return 'var(--red)'
+  if (s === 'paused')  return 'var(--amber)'
+  return 'var(--muted)'
+}
+function confCol(c) {
+  if (c === 'HIGH')   return 'var(--green)'
+  if (c === 'MEDIUM') return 'var(--amber)'
+  return 'var(--muted)'
+}
+
+// ── Render functions ───────────────────────────────────────────
+
+function renderStats() {
+  if (!botState) return
+  const s = botState
+  const pnl = s.total_pnl ?? 0
+  const wr = s.total_trades > 0 ? (s.total_wins / s.total_trades * 100).toFixed(1) : '—'
+  const streak = s.consecutive_losses > 0
+    ? `${s.consecutive_losses}L` : `${s.consecutive_wins ?? 0}W`
+
+  $('bankroll').textContent = `$${fmt(s.current_bankroll)}`
+  $('bankrollHint').textContent = `started $${fmt(s.bankroll)}`
+  $('totalPnl').textContent = `${pnl >= 0 ? '+' : ''}$${fmt(pnl)}`
+  $('totalPnl').style.color = pnlCol(pnl)
+  $('winRate').textContent = `${wr}%`
+  $('winRateHint').textContent = `${s.total_wins}/${s.total_trades} trades`
+  $('streak').textContent = streak
+  $('streak').style.color = s.consecutive_losses > 0 ? 'var(--red)' : 'var(--green)'
+  $('botStatus').textContent = s.status_message ?? '—'
+}
+
+function renderSignal() {
+  if (!signals.length) return
+  const s = signals[0]
+  const dirCol = s.direction === 'UP' ? 'var(--green)' : s.direction === 'DOWN' ? 'var(--red)' : 'var(--muted)'
+  const dirArrow = s.direction === 'UP' ? '▲' : s.direction === 'DOWN' ? '▼' : '—'
+  const votes = [
+    {label:'RSI',    v: s.vote_rsi},
+    {label:'EMA',    v: s.vote_ema},
+    {label:'BB',     v: s.vote_bb},
+    {label:'Candle', v: s.vote_candle},
+    {label:'Volume', v: s.vote_volume},
+    {label:'Momentum',v: s.vote_momentum}
+  ]
+  $('signalPanel').innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      <div style="font-size:16px;font-weight:600;color:${dirCol};">${dirArrow} ${s.direction}</div>
+      <div style="font-size:12px;color:${confCol(s.confidence)};background:#1e293b;padding:2px 8px;border-radius:4px;">${s.confidence}</div>
+      <div style="font-size:12px;color:var(--muted);">net ${s.net_score >= 0 ? '+' : ''}${fmt(s.net_score,1)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-left:auto;">edge ${fmt(s.edge*100,1)}%</div>
+    </div>
+    <div class="votes">
+      ${votes.map(v => `
+        <div class="vote">
+          <div class="vlabel">${v.label}</div>
+          <div class="vval" style="color:${pnlCol(v.v)}">${v.v >= 0 ? '+' : ''}${fmt(v.v,1)}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px;color:#475569;">
+      <span>RSI ${fmt(s.rsi,1)}</span>
+      <span>EMA9 ${fmt(s.ema9,0)}</span>
+      <span>EMA21 ${fmt(s.ema21,0)}</span>
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:var(--dimmer);">${fmtTime(s.ts)}</div>
+  `
+}
+
+function renderTrades() {
+  if (!trades.length) {
+    $('tradesList').innerHTML = '<div class="empty">No trades yet...</div>'
+    return
+  }
+  $('tradesList').innerHTML = trades.map(t => `
+    <div class="trade-row">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="badge badge-${t.side.toLowerCase()}">${t.side}</span>
+        <span style="color:#cbd5e1;">$${fmt(t.size_usdc)}</span>
+        <span style="color:#475569;">@ ${fmt(t.price_target,3)}</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        ${t.pnl !== null ? `<span style="color:${pnlCol(t.pnl)};font-weight:600;">${t.pnl>=0?'+':''}$${fmt(t.pnl)}</span>` : ''}
+        <span class="badge badge-${t.status}">${t.status}</span>
+        <span style="color:var(--dimmer);font-size:10px;">${fmtTime(t.ts)}</span>
+      </div>
+    </div>
+  `).join('')
+}
+
+function renderAgents() {
+  if (!agents.length) { $('agentsList').innerHTML = '<div class="empty">—</div>'; return }
+  $('agentsList').innerHTML = agents.map(a => `
+    <div class="agent-row">
+      <div>
+        <div class="agent-name">${a.agent_name}</div>
+        <div class="agent-task">${a.current_task ?? '—'}</div>
+      </div>
+      <div class="agent-badge" style="color:${statusCol(a.status)}">${a.status}</div>
+    </div>
+  `).join('')
+}
+
+function renderAlerts() {
+  if (!alerts.length) { $('alertsList').innerHTML = '<div class="empty">No alerts</div>'; return }
+  const dotCol = l => l === 'critical' ? 'var(--red)' : l === 'warning' ? 'var(--amber)' : 'var(--blue)'
+  $('alertsList').innerHTML = alerts.map(a => `
+    <div class="alert-item">
+      <div><span class="alert-dot" style="color:${dotCol(a.level)}">●</span><span class="alert-msg">${a.message}</span></div>
+      <div class="alert-time">${timeAgo(a.ts)}</div>
+    </div>
+  `).join('')
+}
+
+function renderPnlChart() {
+  const canvas = $('pnlChart')
+  if (!pnlHistory.length) {
+    canvas.style.display = 'none'
+    $('chartEmpty').style.display = 'block'
+    return
+  }
+  canvas.style.display = 'block'
+  $('chartEmpty').style.display = 'none'
+
+  const labels = pnlHistory.map(p => p.t)
+  const data = pnlHistory.map(p => p.cumPnl)
+
+  if (pnlChart) {
+    pnlChart.data.labels = labels
+    pnlChart.data.datasets[0].data = data
+    pnlChart.update('none')
+    return
+  }
+
+  pnlChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99,102,241,0.08)',
+        fill: true,
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: {
+        callbacks: { label: ctx => `$${ctx.parsed.y.toFixed(2)}` }
+      }},
+      scales: {
+        x: { ticks: { color: '#475569', font: { size: 10 } }, grid: { display: false } },
+        y: {
+          ticks: { color: '#475569', font: { size: 10 }, callback: v => `$${v.toFixed(1)}` },
+          grid: { color: '#1e293b' }
+        }
+      }
+    }
+  })
+}
+
+function rebuildPnlHistory() {
+  let cum = 0
+  pnlHistory = [...trades]
+    .filter(t => t.pnl !== null)
+    .reverse()
+    .map(t => { cum += t.pnl; return { t: fmtTime(t.ts), cumPnl: parseFloat(cum.toFixed(2)) } })
+}
+
+function renderAll() {
+  renderStats()
+  renderSignal()
+  renderTrades()
+  renderAgents()
+  renderAlerts()
+  rebuildPnlHistory()
+  renderPnlChart()
+  $('lastUpdate').textContent = `updated ${timeAgo(new Date().toISOString())}`
+}
+
+// ── Initial load ───────────────────────────────────────────────
+async function loadAll() {
+  const [stateRes, tradesRes, signalsRes, alertsRes, agentsRes] = await Promise.all([
+    db.from('bot_state').select('*').eq('id', 1).single(),
+    db.from('trades').select('*').order('ts', {ascending: false}).limit(50),
+    db.from('signals').select('*').order('ts', {ascending: false}).limit(100),
+    db.from('alerts').select('*').order('ts', {ascending: false}).limit(20),
+    db.from('agent_status').select('*')
+  ])
+  if (stateRes.data)  botState = stateRes.data
+  if (tradesRes.data)  trades   = tradesRes.data
+  if (signalsRes.data) signals  = signalsRes.data
+  if (alertsRes.data)  alerts   = alertsRes.data
+  if (agentsRes.data)  agents   = agentsRes.data
+  renderAll()
+}
+
+// ── Realtime subscriptions ─────────────────────────────────────
+function subscribeRealtime() {
+  db.channel('bot-live')
+    .on('postgres_changes', {event:'*',    schema:'public', table:'bot_state'},    p => { botState = p.new; renderStats() })
+    .on('postgres_changes', {event:'INSERT',schema:'public', table:'trades'},      p => { trades = [p.new, ...trades].slice(0,50); rebuildPnlHistory(); renderPnlChart(); renderTrades() })
+    .on('postgres_changes', {event:'UPDATE',schema:'public', table:'trades'},      p => { trades = trades.map(t => t.id === p.new.id ? p.new : t); rebuildPnlHistory(); renderPnlChart(); renderTrades() })
+    .on('postgres_changes', {event:'INSERT',schema:'public', table:'signals'},     p => { signals = [p.new, ...signals].slice(0,100); renderSignal() })
+    .on('postgres_changes', {event:'INSERT',schema:'public', table:'alerts'},      p => { alerts = [p.new, ...alerts].slice(0,20); renderAlerts() })
+    .on('postgres_changes', {event:'*',    schema:'public', table:'agent_status'}, p => {
+      const idx = agents.findIndex(a => a.agent_name === p.new.agent_name)
+      agents = idx >= 0 ? agents.map((a,i) => i===idx ? p.new : a) : [...agents, p.new]
+      renderAgents()
+    })
+    .subscribe(status => {
+      const on = status === 'SUBSCRIBED'
+      $('dot').classList.toggle('on', on)
+      $('liveLabel').textContent = on ? 'Live' : 'Reconnecting...'
+    })
+}
+
+// ── Boot ───────────────────────────────────────────────────────
+loadAll().then(subscribeRealtime)
+
+// Refresh time-ago labels every 30s
+setInterval(() => {
+  $('lastUpdate').textContent = `updated ${timeAgo(new Date().toISOString())}`
+  renderAlerts() // refresh "X ago" on alerts
+}, 30_000)
+</script>
+</body>
+</html>
