@@ -44,7 +44,7 @@ export async function upsertMarket(market: {
   volume?: number
   active?: boolean
 }): Promise<void> {
-  await query('POST', 'markets', { ...market, last_seen_at: new Date().toISOString() })
+  await query('POST', 'markets', { ...market, last_seen_at: new Date().toISOString() }, undefined, 'resolution=merge-duplicates,return=minimal')
 }
 
 // ── Signal operations ────────────────────────────────────────
