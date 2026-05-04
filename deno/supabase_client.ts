@@ -10,18 +10,20 @@ async function query(
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   table: string,
   body?: unknown,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  prefer?: string
 ): Promise<unknown> {
   const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`)
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
 
+  const preferHeader = prefer ?? (method === 'POST' ? 'return=representation' : 'return=minimal')
   const res = await fetch(url.toString(), {
     method,
     headers: {
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${SUPABASE_KEY}`,
       'Content-Type': 'application/json',
-      Prefer: method === 'POST' ? 'return=representation' : 'return=minimal'
+      Prefer: preferHeader
     },
     body: body ? JSON.stringify(body) : undefined
   })
@@ -105,5 +107,5 @@ export async function setAgentStatus(
     current_task: currentTask,
     last_active: new Date().toISOString(),
     metadata: metadata ?? {}
-  })
+  }, undefined, 'resolution=merge-duplicates,return=minimal')
 }
