@@ -328,7 +328,10 @@ async function fetchShortTermMarkets() {
     if (!res.ok) return []
     const data = await res.json()
     return data
-      .filter((m: any) => !m.closed && m.active && m.volumeNum > 1000 && m.outcomePrices?.length >= 2)
+      .filter((m: any) =>
+        !m.closed && m.active && m.volumeNum > 50 && m.outcomePrices?.length >= 2 &&
+        m.endDateIso && (new Date(m.endDateIso).getTime() - Date.now()) < 4 * 60 * 60 * 1000
+      )
       .map((m: any) => ({
         conditionId: m.conditionId,
         question: m.question,
