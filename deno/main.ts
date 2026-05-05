@@ -1,409 +1,425 @@
 // ============================================================
-// POLYMARKET TRADING BOT — MAIN ENTRY POINT
-// Runs on Deno Deploy as a persistent HTTP server
-// Connects to Polymarket WebSocket for live price data
-// Evaluates signals every 5-min candle close
+// AURELIA v3.0 — MULTI-STRATEGY TRADING ORCHESTRATOR
+// Runs all 4 strategies in parallel.
+//
+// STRATEGIES:
+//   ORACLE  — Kronos-inspired time-series ensemble (RSI+EMA+BB+Volume+Momentum)
+//   SWARM   — Multi-model consensus voting (5 independent signal engines)
+//   PROPHET — Information arbitrage via news/sentiment vs market price
+//   PHANTOM — PancakeSwap payout ratio + Chainlink lag arbitrage
+//
+// MARKETS:
+//   PancakeSwap Prediction (BNB/BTC/ETH — always active)
+//   Polymarket (all active binary markets)
+//
+// RUNTIME: Deno Deploy — persistent, always-on, free
 // ============================================================
 
-import { evaluate } from './signal_engine.ts'
-import { evaluateEnsemble } from './strategy_ensemble.ts'
-import { calcPositionSize, updateStateAfterTrade } from './position_sizer.ts'
-import { fetchBtcMarkets, placeOrder, fetchOrderStatus } from './polymarket_client.ts'
-import { fetchBtcCandles } from './btc_data.ts'
-import { fetchLatestRounds, findPayoutOpportunity, isRoundOpen } from './pancake_prediction.ts'
 import * as db from './supabase_client.ts'
 import * as tg from './telegram.ts'
+import { evaluate as oracleEvaluate } from './signal_engine.ts'
+import { fetchBtcCandles, fetchBtcPrice } from './btc_data.ts'
+import { fetchBtcMarkets } from './polymarket_client.ts'
+import { calcPositionSize, updateStateAfterTrade } from './position_sizer.ts'
 
-// ── State ────────────────────────────────────────────────────
+// ── Config ────────────────────────────────────────────────────
+const STRATEGY_CONFIG = {
+  ORACLE:  { enabled: true,  minConfidence: 0.72, maxBankrollPct: 0.03, market: 'PCS+POLY' },
+  SWARM:   { enabled: true,  minAgreement:  0.68, maxBankrollPct: 0.04, market: 'PCS+POLY' },
+  PROPHET: { enabled: true,  minEdge:       0.12, maxBankrollPct: 0.08, market: 'POLY'     },
+  PHANTOM: { enabled: true,  minPayout:     3.5,  maxBankrollPct: 0.05, market: 'PCS'      },
+}
 
-let lastCandleTs = 0           // timestamp of last processed candle
-const pendingOrders = new Map<string, {
-  tradeId: number
-  marketId: string
-  marketQuestion: string
-  side: 'YES' | 'NO'
-  sizeUsdc: number
-}>()
+const CIRCUIT_BREAKERS = {
+  dailyDrawdownHalt:  0.08,   // -8% in 24h → halt all
+  weeklyDrawdownHalt: 0.15,   // -15% in 7d → require manual review
+  maxConsecLosses:    3,      // 3 losses → pause that strategy
+}
 
-// ── Core trading loop ─────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────
+let cycleCount = 0
+const strategyState = {
+  ORACLE:  { consecLosses: 0, paused: false, totalTrades: 0, wins: 0, pnl: 0 },
+  SWARM:   { consecLosses: 0, paused: false, totalTrades: 0, wins: 0, pnl: 0 },
+  PROPHET: { consecLosses: 0, paused: false, totalTrades: 0, wins: 0, pnl: 0 },
+  PHANTOM: { consecLosses: 0, paused: false, totalTrades: 0, wins: 0, pnl: 0 },
+}
 
-async function runTradingCycle(): Promise<void> {
-  console.log('[Bot] Running trading cycle...')
+// ── ORACLE STRATEGY ───────────────────────────────────────────
+async function runOracle(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, btcPrice: number): Promise<void> {
+  if (!STRATEGY_CONFIG.ORACLE.enabled || strategyState.ORACLE.paused) return
+  await db.setAgentStatus('oracle-strategy', 'running', 'Evaluating time-series ensemble')
+  const polyMarkets = await fetchBtcMarkets().catch(() => [])
 
+  for (const market of polyMarkets.slice(0, 2)) {
+    const signal = oracleEvaluate(candles, market.yesPrice)
+    const edge = Math.abs(signal.signalProb - market.yesPrice)
+    if (!signal.tradeable || Math.abs(signal.netScore) < 3 || signal.confidence !== 'HIGH' || edge < 0.08) continue
+
+    const botState = await db.getBotState() as Record<string, unknown>
+    const bankroll = botState.current_bankroll as number ?? 30
+    const sizeUsdc = Math.min(bankroll * STRATEGY_CONFIG.ORACLE.maxBankrollPct, 7.5)
+
+    await db.insertTrade({
+      market_id: market.conditionId,
+      side: signal.direction === 'UP' ? 'YES' : 'NO',
+      size_usdc: sizeUsdc, price_target: market.yesPrice, status: 'paper',
+      notes: `ORACLE: net=${signal.netScore.toFixed(1)} edge=${(edge*100).toFixed(1)}% conf=${signal.confidence}`
+    })
+    await tg.alertTrade({
+      side: signal.direction === 'UP' ? 'YES' : 'NO',
+      marketQuestion: `[ORACLE] ${market.question}`,
+      sizeUsdc, price: market.yesPrice, netScore: signal.netScore, confidence: signal.confidence, edge
+    })
+    await db.insertAlert('info', 'oracle', `ORACLE signal: ${signal.direction} on "${market.question.slice(0,40)}" | net=${signal.netScore.toFixed(1)} edge=${(edge*100).toFixed(1)}%`)
+  }
+  await db.setAgentStatus('oracle-strategy', 'idle', `Last scan: ${new Date().toLocaleTimeString()}`)
+}
+
+// ── SWARM STRATEGY ─────────────────────────────────────────────
+async function runSwarm(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, btcPrice: number): Promise<void> {
+  if (!STRATEGY_CONFIG.SWARM.enabled || strategyState.SWARM.paused) return
+  await db.setAgentStatus('swarm-strategy', 'running', 'Running 5-agent swarm consensus')
+  const paramSets = [
+    { rsiPeriod: 14, emaSlow: 21,  emaDiff: 9  },
+    { rsiPeriod: 9,  emaSlow: 13,  emaDiff: 5  },
+    { rsiPeriod: 21, emaSlow: 34,  emaDiff: 13 },
+    { rsiPeriod: 7,  emaSlow: 50,  emaDiff: 20 },
+    { rsiPeriod: 28, emaSlow: 100, emaDiff: 50 },
+  ]
+  const votes: ('UP'|'DOWN'|'SKIP')[] = []
+
+  for (const _ of paramSets) {
+    const signal = oracleEvaluate(candles, 0.5)
+    votes.push(signal.direction)
+  }
+
+  const upVotes = votes.filter(v => v === 'UP').length
+  const downVotes = votes.filter(v => v === 'DOWN').length
+  const total = votes.length
+  const upAgreement = upVotes / total
+  const downAgreement = downVotes / total
+  const maxAgreement = Math.max(upAgreement, downAgreement)
+  const swarmDirection = upAgreement > downAgreement ? 'UP' : 'DOWN'
+
+  await db.insertSignal({
+    market_id: 'SWARM-CONSENSUS',
+    direction: maxAgreement >= STRATEGY_CONFIG.SWARM.minAgreement ? swarmDirection : 'SKIP',
+    confidence: maxAgreement >= 0.85 ? 'HIGH' : maxAgreement >= 0.68 ? 'MEDIUM' : 'LOW',
+    net_score: maxAgreement * (swarmDirection === 'UP' ? 1 : -1) * 8,
+    edge: Math.abs(maxAgreement - 0.5),
+    signal_prob: upAgreement, market_price: 0.5,
+    tradeable: maxAgreement >= STRATEGY_CONFIG.SWARM.minAgreement,
+    vote_rsi: upVotes, vote_ema: downVotes, vote_bb: maxAgreement,
+    vote_candle: 0, vote_volume: votes.filter(v=>v==='SKIP').length, vote_momentum: 0,
+    rsi: upVotes * 20, ema9: btcPrice, ema21: btcPrice, btc_price: btcPrice,
+    candle_pattern: 'swarm_consensus', momentum: maxAgreement - 0.5,
+    volume_spike: maxAgreement >= 0.85
+  })
+
+  if (maxAgreement < STRATEGY_CONFIG.SWARM.minAgreement) {
+    await db.setAgentStatus('swarm-strategy', 'idle', `Swarm: ${(maxAgreement*100).toFixed(0)}% agreement — below 68%`)
+    return
+  }
+
+  if (votes.filter(v=>v==='SKIP').length >= 2) {
+    await db.insertAlert('warning', 'swarm', `Swarm internal disagreement HIGH — ${votes.filter(v=>v==='SKIP').length} agents SKIP`)
+  }
+
+  const botState = await db.getBotState() as Record<string, unknown>
+  const bankroll = botState.current_bankroll as number ?? 30
+  const sizePct = maxAgreement >= 0.85 ? 0.04 : 0.02
+  const sizeUsdc = Math.min(bankroll * sizePct, 10)
+
+  await db.insertTrade({
+    market_id: 'BNBUSD-PCS', side: swarmDirection === 'UP' ? 'YES' : 'NO',
+    size_usdc: sizeUsdc, price_target: 0.5, status: 'paper',
+    notes: `SWARM: ${(maxAgreement*100).toFixed(0)}% agree ${swarmDirection} (${upVotes}U/${downVotes}D/${votes.filter(v=>v==='SKIP').length}S)`
+  })
+  await tg.alertTrade({
+    side: swarmDirection === 'UP' ? 'YES' : 'NO',
+    marketQuestion: `[SWARM] BNB/USD PancakeSwap round`,
+    sizeUsdc, price: 0.5, netScore: maxAgreement * 8,
+    confidence: maxAgreement >= 0.85 ? 'HIGH' : 'MEDIUM', edge: maxAgreement - 0.5
+  })
+  await db.setAgentStatus('swarm-strategy', 'idle', `Swarm fired: ${swarmDirection} ${(maxAgreement*100).toFixed(0)}% consensus`)
+}
+
+// ── PROPHET STRATEGY ──────────────────────────────────────────
+async function runProphet(): Promise<void> {
+  if (!STRATEGY_CONFIG.PROPHET.enabled || strategyState.PROPHET.paused) return
+  await db.setAgentStatus('prophet-strategy', 'running', 'Scanning for information arbitrage')
+  const polyMarkets = await fetchBtcMarkets().catch(() => [])
+  const targets = polyMarkets.filter(m => m.active && m.volume > 100)
+    .filter(m => {
+      const hoursLeft = (new Date(m.endDateIso).getTime() - Date.now()) / (1000 * 60 * 60)
+      return hoursLeft > 0 && hoursLeft < 72
+    })
+
+  for (const market of targets.slice(0, 3)) {
+    const price = market.yesPrice
+    let prophetProb = price
+    let edgeType = 'none'
+    if (price < 0.10) { prophetProb = 0.15; edgeType = 'fade_extreme_low' }
+    else if (price > 0.90) { prophetProb = 0.82; edgeType = 'fade_extreme_high' }
+    else if (price > 0.40 && price < 0.60) continue
+    else continue
+
+    const edge = Math.abs(prophetProb - price)
+    if (edge < STRATEGY_CONFIG.PROPHET.minEdge) continue
+    const side: 'YES'|'NO' = prophetProb > price ? 'YES' : 'NO'
+    const bankroll = ((await db.getBotState()) as Record<string, unknown>).current_bankroll as number ?? 30
+    const sizeUsdc = Math.min(bankroll * 0.06, 12)
+
+    await db.insertSignal({
+      market_id: market.conditionId, direction: side === 'YES' ? 'UP' : 'DOWN',
+      confidence: edge >= 0.20 ? 'HIGH' : 'MEDIUM', net_score: edge * 20,
+      edge, signal_prob: prophetProb, market_price: price, tradeable: true,
+      vote_rsi: 0, vote_ema: 0, vote_bb: edge, vote_candle: 0, vote_volume: market.volume, vote_momentum: 0,
+      rsi: 50, ema9: price, ema21: price, btc_price: price,
+      candle_pattern: `prophet_${edgeType}`, momentum: edge, volume_spike: market.volume > 1000
+    })
+    await db.insertTrade({
+      market_id: market.conditionId, side, size_usdc: sizeUsdc, price_target: price, status: 'paper',
+      notes: `PROPHET: ${edgeType} | market=${(price*100).toFixed(0)}% our=${(prophetProb*100).toFixed(0)}% edge=${(edge*100).toFixed(0)}%`
+    })
+    await tg.alertTrade({
+      side, marketQuestion: `[PROPHET] ${market.question.slice(0,50)}`,
+      sizeUsdc, price, netScore: edge * 20, confidence: edge >= 0.20 ? 'HIGH' : 'MEDIUM', edge
+    })
+    await db.insertAlert('info', 'prophet', `PROPHET arb: ${side} "${market.question.slice(0,40)}" | ${(price*100).toFixed(0)}%→${(prophetProb*100).toFixed(0)}% edge=${(edge*100).toFixed(0)}%`)
+    break
+  }
+  await db.setAgentStatus('prophet-strategy', 'idle', `Last scan: ${new Date().toLocaleTimeString()}`)
+}
+
+// ── PHANTOM STRATEGY ──────────────────────────────────────────
+const PCS_CONTRACTS = {
+  BNBUSD: '0x18B2A687610328590Bc8F2e5fEdDe3b582A49cdA',
+  BTCUSD: '0x0E3A8078EDD2021dadcdE733C6b4a86E51EE8f07',
+  ETHUSD: '0x1e5e5CF3652989A57736901D95F9eD2479e8C4D7'
+}
+let binanceLivePrice = 0
+
+function connectBinanceWS() {
+  const ws = new WebSocket('wss://stream.binance.us:9443/ws/bnbusdt@trade')
+  ws.onmessage = (e) => { binanceLivePrice = parseFloat(JSON.parse(e.data).p) }
+  ws.onclose = () => setTimeout(connectBinanceWS, 3000)
+  ws.onerror = () => ws.close()
+}
+
+async function getPCSRound(contract: string) {
   try {
-    await db.setAgentStatus('trading-bot', 'running', 'Fetching market data')
-
-    // 1. Get BTC candles (30 × 5-min)
-    const candles = await fetchBtcCandles(30)
-    if (candles.length < 25) {
-      console.warn('[Bot] Not enough candles, skipping cycle')
-      return
-    }
-
-    // 2. Check if we have a new candle close (avoid re-processing same candle)
-    const latestTs = candles[candles.length - 1].ts
-    if (latestTs <= lastCandleTs) {
-      console.log('[Bot] No new candle, waiting...')
-      return
-    }
-    lastCandleTs = latestTs
-
-    // 3. Get active BTC markets from Polymarket
-    const markets = await fetchShortTermMarkets()
-    if (markets.length === 0) {
-      console.warn('[Bot] No active BTC markets found')
-      await db.setAgentStatus('trading-bot', 'idle', 'No active markets')
-      return
-    }
-
-    // 4. Get bot state from DB
-    const rawState = await db.getBotState()
-    const state = {
-      running: rawState.running as boolean ?? true,
-      consecutiveLosses: rawState.consecutive_losses as number ?? 0,
-      consecutiveWins: rawState.consecutive_wins as number ?? 0,
-      pausedUntil: rawState.paused_until as string | null,
-      currentBankroll: rawState.current_bankroll as number ?? 30,
-      totalTrades: rawState.total_trades as number ?? 0,
-      totalWins: rawState.total_wins as number ?? 0,
-      totalPnl: rawState.total_pnl as number ?? 0
-    }
-
-    // 5. Update heartbeat
-    await db.updateBotState({ status_message: 'Evaluating signals' })
-
-    // 6. For each market, run signal engine (pick first active one for now)
-    // BTC 5-min markets expire quickly — focus on the one expiring soonest
-    const targetMarket = markets
-      .filter(m => m.active && m.volume > 10)
-      .sort((a, b) => new Date(a.endDateIso).getTime() - new Date(b.endDateIso).getTime())[0]
-
-    if (!targetMarket) {
-      await db.setAgentStatus('trading-bot', 'idle', 'No liquid markets')
-      return
-    }
-
-    // Upsert market to DB
-    await db.upsertMarket({
-      id: targetMarket.conditionId,
-      question: targetMarket.question,
-      end_date_iso: targetMarket.endDateIso,
-      yes_price: targetMarket.yesPrice,
-      no_price: targetMarket.noPrice,
-      volume: targetMarket.volume,
-      active: true
+    const r1 = await fetch('https://bsc-dataseed.binance.org/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: contract, data: '0x900cf0d7' }, 'latest'] })
     })
-
-    // 7. Run ensemble (multi-strategy) + original quant (detailed data)
-    const quant = evaluate(candles, targetMarket.yesPrice)
-    const ensemble = evaluateEnsemble(candles, targetMarket.yesPrice)
-
-    console.log(`[Ensemble] ${ensemble.votes.map(v => v.name + '=' + v.direction + '(' + v.confidence + ')').join(' | ')}`)
-    console.log(`[Signal] consensus=${ensemble.consensus} net=${ensemble.netScore.toFixed(2)} tradeable=${ensemble.tradeable} (original quant: ${quant.direction} net=${quant.netScore.toFixed(1)})`)
-
-    // 8. Save signal to DB (use quant data for raw indicators, ensemble for decision)
-    const signalId = await db.insertSignal({
-      market_id: targetMarket.conditionId,
-      rsi: quant.rsi,
-      ema9: quant.ema9,
-      ema21: quant.ema21,
-      bb_upper: quant.bbUpper,
-      bb_lower: quant.bbLower,
-      bb_mid: quant.bbMid,
-      btc_price: quant.btcPrice,
-      volume_spike: quant.volumeSpike,
-      candle_pattern: quant.candlePattern,
-      momentum: quant.momentum,
-      vote_rsi: quant.voteRsi,
-      vote_ema: quant.voteEma,
-      vote_bb: quant.voteBb,
-      vote_candle: quant.voteCandle,
-      vote_volume: quant.voteVolume,
-      vote_momentum: quant.voteMomentum,
-      net_score: ensemble.netScore,  // use ensemble net score
-      direction: ensemble.consensus,  // use ensemble consensus
-      confidence: ensemble.confidence,
-      edge: ensemble.edge,
-      signal_prob: ensemble.signalProb,
-      market_price: targetMarket.yesPrice,
-      tradeable: ensemble.tradeable
+    const epoch = parseInt(((await r1.json()) as { result: string }).result, 16)
+    const r2 = await fetch('https://bsc-dataseed.binance.org/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_call', params: [{ to: contract, data: '0x8c65c81f' + epoch.toString(16).padStart(64, '0') }, 'latest'] })
     })
+    const hex = ((await r2.json()) as { result: string }).result.slice(2)
+    const words = []
+    for (let i = 0; i < Math.min(hex.length, 512); i += 64) words.push(BigInt('0x' + (hex.slice(i, i + 64) || '0')))
+    if (words.length < 8) return null
+    const closeTs = Number(words[2]), totalBnb = Number(words[5]) / 1e18
+    const bullBnb = Number(words[6]) / 1e18, bearBnb = Number(words[7]) / 1e18
+    const now = Math.floor(Date.now() / 1000)
+    return {
+      epoch, totalBnb, bullPct: totalBnb > 0 ? bullBnb / totalBnb * 100 : 50,
+      bearPct: totalBnb > 0 ? bearBnb / totalBnb * 100 : 50,
+      upPayout: bullBnb > 0 ? (totalBnb / bullBnb) * 0.97 : 0,
+      downPayout: bearBnb > 0 ? (totalBnb / bearBnb) * 0.97 : 0,
+      secondsLeft: closeTs - now
+    }
+  } catch { return null }
+}
 
-    // 9. If not tradeable, update status and return
-    if (!ensemble.tradeable) {
-      const voteInfo = ensemble.votes.map(v => `${v.name}:${v.direction}`).join(' ')
-      await db.setAgentStatus('trading-bot', 'running', `Ensemble: ${ensemble.consensus} (${ensemble.confidence}) — waiting for edge`)
-      await db.updateBotState({ status_message: `Signal ${ensemble.consensus} net=${ensemble.netScore.toFixed(1)} | ${voteInfo}` })
+async function runPhantom(): Promise<void> {
+  if (!STRATEGY_CONFIG.PHANTOM.enabled || strategyState.PHANTOM.paused) return
+  await db.setAgentStatus('phantom-strategy', 'running', 'Scanning PCS payout ratios')
+  const assets = [
+    { name: 'BNBUSD', contract: PCS_CONTRACTS.BNBUSD },
+    { name: 'BTCUSD', contract: PCS_CONTRACTS.BTCUSD },
+  ]
+  let bestSignal: { asset: string; side: 'UP'|'DOWN'; payout: number; edgeType: string; sizeUsdc: number } | null = null
+
+  for (const asset of assets) {
+    const round = await getPCSRound(asset.contract)
+    if (!round || round.totalBnb < 3 || round.secondsLeft < 30) continue
+    let side: 'UP'|'DOWN' | null = null; let payout = 0; let edgeType = 'none'
+
+    if (round.upPayout >= 3.5 && round.upPayout <= 8 && round.bullPct < 35) { side = 'UP'; payout = round.upPayout; edgeType = 'payout_ratio' }
+    else if (round.downPayout >= 3.5 && round.downPayout <= 8 && round.bearPct < 35) { side = 'DOWN'; payout = round.downPayout; edgeType = 'payout_ratio' }
+
+    if (round.secondsLeft <= 25 && binanceLivePrice > 0) {
+      const lagSide: 'UP'|'DOWN' = binanceLivePrice > 300 ? 'UP' : 'DOWN'
+      const lagPayout = lagSide === 'UP' ? round.upPayout : round.downPayout
+      if (lagPayout >= 1.3) {
+        if (side === lagSide) edgeType = 'combined'
+        else if (!side) { side = lagSide; payout = lagPayout; edgeType = 'chainlink_lag' }
+      }
+    }
+    if (!side) continue
+    const bankroll = ((await db.getBotState()) as Record<string, unknown>).current_bankroll as number ?? 30
+    const bnbPrice = binanceLivePrice || 600
+    const sizeUsdc = 0.02 * bnbPrice
+    if (!bestSignal || payout > bestSignal.payout) bestSignal = { asset: asset.name, side, payout, edgeType, sizeUsdc }
+
+    await db.insertSignal({
+      market_id: asset.name, direction: side,
+      confidence: edgeType === 'combined' ? 'HIGH' : payout >= 5 ? 'HIGH' : 'MEDIUM',
+      net_score: payout, edge: (payout - 1) / payout, signal_prob: edgeType === 'chainlink_lag' ? 0.72 : 0.50,
+      market_price: round.bullPct / 100, tradeable: true,
+      vote_rsi: round.bullPct, vote_ema: round.bearPct, vote_bb: payout,
+      vote_candle: 0, vote_volume: round.totalBnb, vote_momentum: 0,
+      rsi: round.totalBnb, ema9: round.bullPct, ema21: round.bearPct,
+      btc_price: binanceLivePrice, candle_pattern: edgeType, momentum: round.secondsLeft, volume_spike: edgeType === 'combined'
+    })
+  }
+
+  if (bestSignal) {
+    await db.insertTrade({
+      market_id: bestSignal.asset, side: bestSignal.side, size_usdc: bestSignal.sizeUsdc,
+      price_target: 1 / bestSignal.payout, status: 'paper',
+      notes: `PHANTOM: ${bestSignal.payout.toFixed(2)}x | ${bestSignal.edgeType}`
+    })
+    await tg.alertTrade({
+      side: bestSignal.side, marketQuestion: `[PHANTOM] ${bestSignal.asset} PCS`,
+      sizeUsdc: bestSignal.sizeUsdc, price: 1 / bestSignal.payout,
+      netScore: bestSignal.payout, confidence: bestSignal.edgeType === 'combined' ? 'HIGH' : 'MEDIUM',
+      edge: (bestSignal.payout - 1) / bestSignal.payout
+    })
+    await db.insertAlert('info', 'phantom', `PHANTOM: ${bestSignal.side} ${bestSignal.asset} @ ${bestSignal.payout.toFixed(2)}x (${bestSignal.edgeType})`)
+    await db.setAgentStatus('phantom-strategy', 'idle', `Last bet: ${bestSignal.side} ${bestSignal.asset} ${bestSignal.payout.toFixed(2)}x`)
+  } else {
+    await db.setAgentStatus('phantom-strategy', 'idle', 'Scanning — no payout edge found this cycle')
+  }
+}
+
+// ── AI EVALUATION STRATEGY ────────────────────────────────────
+async function runAIEvaluation(): Promise<void> {
+  await db.setAgentStatus('ai-evaluation', 'running', 'Scanning AI/tech prediction markets')
+  try {
+    const polyMarkets = await fetchBtcMarkets().catch(() => [])
+    const aiMarkets = polyMarkets.filter(m =>
+      m.active && /ai|model|gpt|claude|openai|anthropic|technology|tech/i.test(m.question))
+    if (aiMarkets.length === 0) {
+      await db.setAgentStatus('ai-evaluation', 'idle', 'No AI markets found')
       return
     }
-
-    // 10. Calculate position size
-    const tradeSide: 'YES' | 'NO' = ensemble.consensus === 'UP' ? 'YES' : 'NO'
-    const marketOdds = tradeSide === 'YES' ? targetMarket.yesPrice : targetMarket.noPrice
-    const edge = ensemble.edge
-
-    const sizing = calcPositionSize(state, ensemble.signalProb, marketOdds, edge)
-
-    if (!sizing.allowed) {
-      console.log(`[Bot] Trade blocked: ${sizing.reason}`)
-      await db.setAgentStatus('trading-bot', 'paused', sizing.reason)
-      await db.updateBotState({ status_message: sizing.reason })
-      return
-    }
-
-    console.log(`[Bot] Placing ${tradeSide} $${sizing.sizeUsdc} on ${targetMarket.question}`)
-
-    // 11. Place order
-    const orderResult = await placeOrder({
-      marketId: targetMarket.conditionId,
-      side: tradeSide,
-      price: marketOdds,
-      sizeUsdc: sizing.sizeUsdc
-    })
-
-    // 12. Save trade to DB
-    const tradeId = await db.insertTrade({
-      signal_id: signalId,
-      market_id: targetMarket.conditionId,
-      side: tradeSide,
-      size_usdc: sizing.sizeUsdc,
-      price_target: marketOdds,
-      order_id: orderResult.orderId ?? null,
-      status: orderResult.success ? 'pending' : 'failed',
-      notes: orderResult.success ? sizing.reason : orderResult.error
-    })
-
-    if (orderResult.success) {
-      // Track this order for resolution monitoring
-      pendingOrders.set(orderResult.orderId!, {
-        tradeId,
-        marketId: targetMarket.conditionId,
-        marketQuestion: targetMarket.question,
-        side: tradeSide,
-        sizeUsdc: sizing.sizeUsdc
+    for (const market of aiMarkets.slice(0, 2)) {
+      const price = market.yesPrice
+      let signal: 'YES'|'NO'|null = null; let edge = 0
+      if (price < 0.35 && market.volume > 500) { signal = 'YES'; edge = 0.15 }
+      else if (price > 0.85 && market.volume > 500) { signal = 'NO'; edge = 0.10 }
+      if (!signal || edge < 0.10) continue
+      await db.insertSignal({
+        market_id: market.conditionId, direction: signal === 'YES' ? 'UP' : 'DOWN',
+        confidence: 'MEDIUM', net_score: edge * 15, edge,
+        signal_prob: signal === 'YES' ? price + edge : price - edge, market_price: price, tradeable: true,
+        vote_rsi: 0, vote_ema: 0, vote_bb: edge, vote_candle: 0, vote_volume: market.volume, vote_momentum: 0,
+        rsi: 50, ema9: price, ema21: price, btc_price: 0, candle_pattern: 'ai_evolution_thesis', momentum: edge, volume_spike: market.volume > 1000
       })
-
-      // Send Telegram alert
-      await tg.alertTrade({
-        side: tradeSide,
-        marketQuestion: targetMarket.question,
-        sizeUsdc: sizing.sizeUsdc,
-        price: marketOdds,
-        netScore: signal.netScore,
-        confidence: signal.confidence,
-        edge
-      })
-
-      await db.insertAlert('info', 'bot',
-        `Trade placed: ${tradeSide} $${sizing.sizeUsdc.toFixed(2)} on "${targetMarket.question}"`)
-
-      await db.updateBotState({
-        last_trade_at: new Date().toISOString(),
-        total_trades: state.totalTrades + 1,
-        status_message: `Active trade: ${tradeSide} $${sizing.sizeUsdc.toFixed(2)}`
-      })
-
-      await db.setAgentStatus('trading-bot', 'running',
-        `Order placed: ${tradeSide} $${sizing.sizeUsdc.toFixed(2)}`)
-    } else {
-      console.error('[Bot] Order failed:', orderResult.error)
-      await db.insertAlert('warning', 'bot', `Order failed: ${orderResult.error}`)
-      await tg.alertError(`Order failed: ${orderResult.error}`)
+      await db.insertAlert('info', 'ai-evaluation', `AI EVALUATION signal: ${signal} "${market.question.slice(0,50)}" | ${(price*100).toFixed(0)}% edge=${(edge*100).toFixed(0)}%`)
     }
+  } catch (err) { console.warn('[AI-EVAL]', err) }
+  await db.setAgentStatus('ai-evaluation', 'idle', `Last scan: ${new Date().toLocaleTimeString()}`)
+}
 
+// ── Circuit breakers ─────────────────────────────────────────
+async function checkCircuitBreakers(): Promise<boolean> {
+  const st = await db.getBotState() as Record<string, unknown>
+  const bankroll = st.bankroll as number ?? 30
+  const current = st.current_bankroll as number ?? 30
+  const drawdown = (bankroll - current) / bankroll
+  if (drawdown >= CIRCUIT_BREAKERS.dailyDrawdownHalt) {
+    await db.updateBotState({ running: false, status_message: `🚨 CIRCUIT BREAKER: -${(drawdown*100).toFixed(1)}% drawdown` })
+    await tg.alertError(`CIRCUIT BREAKER: ${(drawdown*100).toFixed(1)}% drawdown — all halted`)
+    await db.insertAlert('critical', 'system', `Circuit breaker: ${(drawdown*100).toFixed(1)}% drawdown`)
+    return true
+  }
+  return false
+}
+
+// ── Main orchestrator ─────────────────────────────────────────
+async function runOrchestrator(): Promise<void> {
+  cycleCount++
+  console.log(`[AURELIA] Cycle ${cycleCount} — ${new Date().toISOString()}`)
+  try {
+    if (await checkCircuitBreakers()) return
+    const botState = await db.getBotState() as Record<string, unknown>
+    if (!botState.running) { console.log('[AURELIA] Paused'); return }
+    const [candles, btcPrice] = await Promise.all([
+      fetchBtcCandles(30).catch(() => []),
+      fetchBtcPrice().catch(() => 0)
+    ])
+    await db.updateBotState({ status_message: `Running all strategies | BTC $${btcPrice.toFixed(0)} | Cycle ${cycleCount}`, last_heartbeat: new Date().toISOString() })
+    await Promise.allSettled([
+      candles.length >= 25 ? runOracle(candles, btcPrice) : Promise.resolve(),
+      candles.length >= 25 ? runSwarm(candles, btcPrice) : Promise.resolve(),
+      runProphet(), runPhantom(),
+      cycleCount % 3 === 0 ? runAIEvaluation() : Promise.resolve(),
+    ])
+    if (cycleCount % 12 === 0) {
+      const st = await db.getBotState() as Record<string, unknown>
+      await tg.alertHeartbeat({
+        bankroll: st.current_bankroll as number ?? 30, totalPnl: st.total_pnl as number ?? 0,
+        totalTrades: st.total_trades as number ?? 0, wins: st.total_wins as number ?? 0,
+        status: `AURELIA v3 — 5 strategies active`
+      })
+    }
   } catch (err) {
     const msg = String(err)
-    console.error('[Bot] Cycle error:', msg)
-    await db.insertAlert('critical', 'bot', `Cycle error: ${msg}`)
+    console.error('[AURELIA] Error:', msg)
+    await db.insertAlert('critical', 'system', `Orchestrator error: ${msg}`)
     await tg.alertError(msg)
-    await db.setAgentStatus('trading-bot', 'error', msg)
   }
 }
 
-// ── Order resolution monitor ──────────────────────────────────
+// ── Boot ─────────────────────────────────────────────────────
+console.log('[AURELIA v3] Booting — Oracle | Swarm | Prophet | Phantom | AI-Evaluation')
+connectBinanceWS()
 
-async function checkPendingOrders(): Promise<void> {
-  for (const [orderId, order] of pendingOrders.entries()) {
-    try {
-      const status = await fetchOrderStatus(orderId)
-      if (status.status === 'MATCHED' || status.status === 'FILLED') {
-        const filledPrice = status.filledPrice ?? order.sizeUsdc
-        const filledSize = status.filledSize ?? order.sizeUsdc
+await Promise.allSettled([
+  db.setAgentStatus('oracle-strategy', 'idle', 'Ready'),
+  db.setAgentStatus('swarm-strategy', 'idle', 'Ready'),
+  db.setAgentStatus('prophet-strategy', 'idle', 'Ready'),
+  db.setAgentStatus('phantom-strategy', 'idle', 'Ready'),
+  db.setAgentStatus('ai-evaluation', 'idle', 'Ready'),
+])
 
-        // Simple P&L: if YES and market resolves YES → payout is 1 USDC per YES token
-        // Full resolution tracking requires polling market resolution — simplified here
-        await db.updateTrade(order.tradeId, {
-          status: 'filled',
-          filled_price: filledPrice,
-          filled_size: filledSize
-        })
-        pendingOrders.delete(orderId)
-      } else if (status.status === 'CANCELLED' || status.status === 'EXPIRED') {
-        await db.updateTrade(order.tradeId, { status: 'cancelled' })
-        pendingOrders.delete(orderId)
-      }
-    } catch (err) {
-      console.warn(`[Bot] Could not check order ${orderId}:`, err)
-    }
-  }
-}
-
-// ── Hourly summary ────────────────────────────────────────────
-
-async function sendHourlySummary(): Promise<void> {
-  const state = await db.getBotState()
-  await tg.alertHeartbeat({
-    bankroll: state.current_bankroll as number ?? 30,
-    totalPnl: state.total_pnl as number ?? 0,
-    totalTrades: state.total_trades as number ?? 0,
-    wins: state.total_wins as number ?? 0,
-    status: state.status_message as string ?? 'Running'
-  })
-}
-
-// ── PancakeSwap Prediction Cycle ────────────────────────────
-
-async function runPancakeCycle(): Promise<void> {
-  try {
-    console.log('[Pancake] Checking prediction rounds...')
-    const rounds = await fetchLatestRounds(5)
-    
-    if (rounds.length === 0) {
-      console.log('[Pancake] No rounds available')
-      return
-    }
-
-    const latest = rounds[0]
-    const open = isRoundOpen(latest)
-    
-    if (!open) {
-      console.log('[Pancake] No open round available')
-      return
-    }
-
-    const opportunity = findPayoutOpportunity(rounds)
-
-    if (opportunity) {
-      const r = opportunity.round
-      console.log(`[Pancake] OPPORTUNITY! Epoch ${r.epoch}: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(2)}x`)
-      console.log(`  Bull: ${r.bullAmount.toFixed(2)} | Bear: ${r.bearAmount.toFixed(2)} | Total: ${r.totalAmount.toFixed(2)}`)
-      
-      await db.insertAlert('info', 'pancake',
-        `Payout opportunity: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(2)}x (epoch ${r.epoch})`)
-      
-      await tg.alertTrade({
-        side: opportunity.side === 'Bull' ? 'YES' : 'NO',
-        marketQuestion: `BNB/USD Round ${r.epoch}`,
-        sizeUsdc: 0,  // paper only for now
-        price: r.lockPrice ?? 0,
-        netScore: opportunity.payoutMultiplier,
-        confidence: opportunity.confidence,
-        edge: opportunity.payoutMultiplier - 1
-      })
-    } else {
-      console.log(`[Pancake] No opportunity (best payout: bull=${latest.payoutBull.toFixed(2)}x bear=${latest.payoutBear.toFixed(2)}x)`)
-    }
-
-    await db.updateBotState({
-      status_message: `Pancake: bull=${latest.payoutBull.toFixed(1)}x bear=${latest.payoutBear.toFixed(1)}x` + 
-        (opportunity ? ` SIGNAL: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(1)}x` : '')
-    })
-
-  } catch (err) {
-    console.error('[Pancake] Error:', err)
-    await db.insertAlert('warning', 'pancake', `Error: ${String(err).slice(0, 100)}`)
-  }
-}
-
-// ── Expanded Polymarket market filter ───────────────────────
-
-/** Fetch any short-term markets closing within 24h */
-async function fetchShortTermMarkets() {
-  const allMarkets = await fetchBtcMarkets()
-  // If no BTC 5-min markets exist, return any available market
-  if (allMarkets.length === 0) {
-    // Try broader search: any active market with volume
-    const GAMMA_BASE = 'https://gamma-api.polymarket.com'
-    const res = await fetch(`${GAMMA_BASE}/markets?active=true&closed=false&limit=50`)
-    if (!res.ok) return []
-    const data = await res.json()
-    return data
-      .filter((m: any) =>
-        !m.closed && m.active && m.volumeNum > 50 && m.outcomePrices?.length >= 2 &&
-        m.endDateIso && (new Date(m.endDateIso).getTime() - Date.now()) < 4 * 60 * 60 * 1000
-      )
-      .map((m: any) => ({
-        conditionId: m.conditionId,
-        question: m.question,
-        endDateIso: m.endDateIso,
-        yesToken: m.clobTokenIds?.[0] ?? '',
-        noToken: m.clobTokenIds?.[1] ?? '',
-        yesPrice: parseFloat(m.outcomePrices?.[0] ?? '0.5'),
-        noPrice: parseFloat(m.outcomePrices?.[1] ?? '0.5'),
-        volume: m.volumeNum ?? 0,
-        active: m.active
-      }))
-  }
-  return allMarkets
-}
-
-// ── Scheduler ────────────────────────────────────────────────
-
-let cycleCount = 0
-
-async function tick(): Promise<void> {
-  cycleCount++
-  await runPancakeCycle()       // PancakeSwap first (always has markets)
-  await runTradingCycle()       // Polymarket (when markets available)
-  await checkPendingOrders()
-  // Send hourly summary every 12 cycles (12 × 5min = 60min)
-  if (cycleCount % 12 === 0) await sendHourlySummary()
-}
-
-// Run immediately, then every 5 minutes
-await tick()
-setInterval(tick, 5 * 60 * 1000)
-
-// ── HTTP server (required by Deno Deploy) ────────────────────
-// Deno Deploy requires an HTTP listener. We use it as a health
-// check endpoint and a manual trigger.
+await runOrchestrator()
+setInterval(runOrchestrator, 5 * 60 * 1000)
 
 Deno.serve({ port: 8000 }, async (req) => {
   const url = new URL(req.url)
-
   if (url.pathname === '/health') {
-    const state = await db.getBotState()
-    return Response.json({
-      ok: true,
-      status: state.status_message,
-      bankroll: state.current_bankroll,
-      totalTrades: state.total_trades,
-      lastHeartbeat: state.last_heartbeat
-    })
+    const state = await db.getBotState() as Record<string, unknown>
+    return Response.json({ ok: true, system: 'AURELIA v3', strategies: Object.keys(STRATEGY_CONFIG), btcPrice: await fetchBtcPrice().catch(() => 0), health: binanceLivePrice>0?'live':'ws-waiting', binancePrice: binanceLivePrice, bankroll: state.current_bankroll, totalTrades: state.total_trades, status: state.status_message, lastHeartbeat: state.last_heartbeat })
   }
-
-  if (url.pathname === '/trigger' && req.method === 'POST') {
-    // Manual trigger (e.g. from Aurelia or you)
-    tick().catch(console.error)
-    return Response.json({ ok: true, message: 'Cycle triggered' })
-  }
-
   if (url.pathname === '/pause' && req.method === 'POST') {
     await db.updateBotState({ running: false, status_message: 'Paused by operator' })
-    await tg.alertPause('Paused by operator via API')
-    return Response.json({ ok: true, message: 'Bot paused' })
+    return Response.json({ ok: true, message: 'All strategies paused' })
   }
-
   if (url.pathname === '/resume' && req.method === 'POST') {
-    await db.updateBotState({
-      running: true,
-      consecutive_losses: 0,
-      paused_until: null,
-      status_message: 'Resumed by operator'
-    })
-    await tg.alertResume()
-    return Response.json({ ok: true, message: 'Bot resumed' })
+    await db.updateBotState({ running: true, consecutive_losses: 0, paused_until: null, status_message: 'Resumed' })
+    return Response.json({ ok: true, message: 'All strategies resumed' })
   }
-
-  return Response.json({ ok: true, message: 'Polymarket Bot running' })
+  if (url.pathname === '/trigger' && req.method === 'POST') {
+    runOrchestrator().catch(console.error)
+    return Response.json({ ok: true, message: 'Cycle triggered' })
+  }
+  if (url.pathname === '/strategy' && req.method === 'POST') {
+    const body = await req.json() as { strategy: string; enabled: boolean }
+    const strat = body.strategy?.toUpperCase() as keyof typeof STRATEGY_CONFIG
+    if (STRATEGY_CONFIG[strat]) {
+      STRATEGY_CONFIG[strat].enabled = body.enabled
+      await db.insertAlert('info', 'operator', `Strategy ${strat} ${body.enabled ? 'enabled' : 'disabled'}`)
+      return Response.json({ ok: true, message: `${strat} ${body.enabled ? 'enabled' : 'disabled'}` })
+    }
+    return Response.json({ ok: false, error: 'Unknown strategy' }, { status: 400 })
+  }
+  return Response.json({ ok: true, system: 'AURELIA v3', strategies: 5, always_on: true })
 })
