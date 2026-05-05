@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>NEXUS TRADING TERMINAL</title>
+<title>NEXUS//TRM</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet"/>
@@ -28,12 +28,12 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .topbar{display:flex;align-items:center;height:34px;background:var(--bg1);border-bottom:1px solid var(--border2);padding:0 12px;position:relative;overflow:hidden;}
 .topbar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--cyan),var(--green),var(--cyan),transparent);animation:scan 4s linear infinite;}
 @keyframes scan{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
-.logo{font-family:var(--font-head);font-size:12px;color:var(--cyan);letter-spacing:4px;margin-right:20px;text-shadow:0 0 12px var(--cyan);animation:glitch 7s ease infinite;flex-shrink:0;}
+.logo{font-family:var(--font-head);font-size:12px;color:var(--cyan);letter-spacing:4px;margin-right:20px;text-shadow:0 0 12px var(--cyan);animation:glitch 7s ease infinite;flex-shrink:0;white-space:nowrap;}
 @keyframes glitch{0%,89%,100%{text-shadow:0 0 12px var(--cyan);}90%{text-shadow:3px 0 0 var(--red),-3px 0 0 var(--green);}92%{text-shadow:-2px 0 0 var(--red),2px 0 0 var(--green);}94%{text-shadow:0 0 12px var(--cyan);}}
 .ticker-strip{flex:1;overflow:hidden;display:flex;align-items:center;height:100%;}
 .ticker-inner{display:flex;animation:ticker 35s linear infinite;white-space:nowrap;}
 @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-.tick{display:flex;align-items:center;gap:6px;padding:0 14px;font-family:var(--font-mono);font-size:10px;border-right:1px solid var(--border);}
+.tick{display:flex;align-items:center;gap:6px;padding:0 14px;font-family:var(--font-mono);font-size:10px;border-right:1px solid var(--border);white-space:nowrap;}
 .tick-sym{color:var(--muted);font-size:9px;}
 .up{color:var(--green);}.dn{color:var(--red);}
 .topright{display:flex;align-items:center;gap:12px;flex-shrink:0;margin-left:12px;}
@@ -79,7 +79,7 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .hb{padding:5px 9px;font-family:var(--font-mono);font-size:8px;color:var(--muted);flex-shrink:0;}
 .smsg{padding:0 9px 6px;font-family:var(--font-mono);font-size:8px;color:var(--cyan);line-height:1.4;flex-shrink:0;}
 
-/* CENTER */
+/* CENTER TOP */
 .ctop{grid-column:2;grid-row:1;display:flex;flex-direction:column;}
 .sigbars{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--border);flex-shrink:0;}
 .sigbar{background:var(--bg2);padding:5px 6px;text-align:center;position:relative;overflow:hidden;}
@@ -127,6 +127,7 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .obrow .op{color:var(--amber);text-align:right;}
 .alfeed{overflow-y:auto;flex:1;}
 .alitem{padding:4px 9px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:8px;line-height:1.5;animation:rowIn 0.3s ease;}
+@keyframes rowIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .alitem .ald{margin-right:4px;}
 .alitem.info .ald{color:var(--cyan);}
 .alitem.warning .ald{color:var(--amber);}
@@ -134,7 +135,25 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .almsg{color:#7aabb8;}
 .altime{color:var(--muted);font-size:7px;margin-top:1px;}
 
-@keyframes rowIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+/* CENTER BOTTOM */
+.cbot{grid-column:2;grid-row:2;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);}
+.tth{display:grid;grid-template-columns:58px 38px 65px 55px 1fr 48px;padding:3px 9px;font-size:7px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;background:var(--bg2);border-bottom:1px solid var(--border);font-family:var(--font-mono);}
+.ttr{display:grid;grid-template-columns:58px 38px 65px 55px 1fr 48px;padding:3px 9px;font-family:var(--font-mono);font-size:9px;border-bottom:1px solid rgba(15,45,58,0.4);align-items:center;animation:rowIn 0.25s ease;}
+.ts.yes,.ts.up{color:var(--green);}
+.ts.no,.ts.down{color:var(--red);}
+.tstat.filled{color:var(--green);}
+.tstat.pending{color:var(--cyan);}
+.tstat.failed{color:var(--red);}
+.tstat.cancelled{color:var(--muted);}
+.tpnl.pos{color:var(--green);}
+.tpnl.neg{color:var(--red);}
+.perf{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);}
+.pc{background:var(--bg1);padding:8px 9px;}
+
+.scroll{overflow-y:auto;}
+.scroll::-webkit-scrollbar{width:2px;}
+.scroll::-webkit-scrollbar-thumb{background:var(--border2);}
+.empty{color:var(--muted);font-family:var(--font-mono);font-size:9px;padding:10px;text-align:center;}
 ::selection{background:var(--cyan);color:var(--bg);}
 ::-webkit-scrollbar{width:3px;}
 ::-webkit-scrollbar-track{background:var(--bg1);}
@@ -145,51 +164,66 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 <script>
 const SUPABASE_URL = 'https://jkoxrftlslylfmugjomd.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_aLhbusq3yeSgr32VykZp2Q_W9juPt-w'
+const DENO_BOT_URL = 'https://dashboard.zak-dev-ai.deno.dev'
 const { createClient } = supabase
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 </script>
 
+<!-- TOPBAR -->
 <div class="topbar">
-  <div class="logo">◆ NEXUS</div>
-  <div class="ticker-strip"><div class="ticker-inner" id="tickerStrip"></div></div>
-  <div class="topright">
-    <div class="livebadge"><span class="dot"></span><span id="liveLabel">LIVE</span></div>
-    <div class="clock" id="clock"></div>
-  </div>
+ <div class="logo">NEXUS//TRM</div>
+ <div class="ticker-strip"><div class="ticker-inner" id="ticker"></div></div>
+ <div class="topright">
+  <div class="livebadge"><div class="dot"></div><span id="connlabel">INIT</span></div>
+  <div class="clock" id="clock">00:00:00</div>
+ </div>
 </div>
 
 <div class="grid">
-  <!-- LEFT -->
-  <div class="left">
-    <div class="sb"><div class="sl">Bankroll</div><div class="sv big c" id="bankroll">$—</div><div class="ss" id="bankrollHint">started $10.00</div></div>
-    <div class="sb sb2"><div class="h"><div class="sl">P&L</div><div class="sv" id="totalPnl">$—</div></div><div class="h2"><div class="sl">Win Rate</div><div class="sv" id="winRate">—%</div><div class="ss" id="winRateHint">0/0</div></div></div>
-    <div class="sb"><div class="sl">Trades</div><div class="sv c" id="totalTrades">0</div></div>
-    <div class="sb"><div class="sl">Best Edge</div><div class="sv g" id="bestEdge">—</div><div class="ss" id="bestEdgeAsset">—</div></div>
-    <div class="ph" style="border-top:1px solid var(--border);margin-top:0;"><span class="t">AGENTS</span><span class="b">3</span></div>
-    <div id="agentsList"></div>
-    <div class="ctrls"><div class="btn btn-r" onclick="control('pause')">⏹ PAUSE</div><div class="btn btn-g" onclick="control('resume')">▶ RESUME</div><div class="btn btn-c" onclick="location.reload()">↻ REFRESH</div></div>
-    <div class="hb" id="hbTime">—</div>
-    <div class="smsg" id="statusMsg">Initialising...</div>
-  </div>
+ <!-- LEFT -->
+ <div class="left">
+   <div class="sb"><div class="sl">Bankroll</div><div class="sv big c" id="bankroll">$—</div><div class="ss" id="bankrollHint">started $10.00</div></div>
+   <div class="sb sb2"><div class="h"><div class="sl">P&L</div><div class="sv" id="totalPnl">$—</div></div><div class="h2"><div class="sl">Win Rate</div><div class="sv" id="winRate">—%</div><div class="ss" id="winRateHint">0/0</div></div></div>
+   <div class="sb"><div class="sl">Trades</div><div class="sv c" id="totalTrades">0</div></div>
+   <div class="sb"><div class="sl">Best Edge</div><div class="sv g" id="bestEdge">—</div><div class="ss" id="bestEdgeAsset">—</div></div>
+   <div class="ph" style="border-top:1px solid var(--border);margin-top:0;"><span class="t">AGENTS</span><span class="b" id="agentCount">0</span></div>
+   <div id="agentsList"></div>
+   <div class="ctrls"><div class="btn btn-r" onclick="control('pause')">⏹ PAUSE</div><div class="btn btn-g" onclick="control('resume')">▶ RESUME</div><div class="btn btn-c" onclick="location.reload()">↻ REFRESH</div></div>
+   <div class="hb" id="hbTime">—</div>
+   <div class="smsg" id="statusMsg">Initialising...</div>
+ </div>
 
-  <!-- CENTER -->
-  <div class="ctop panel">
-    <div class="sigbars" id="sigBars"></div>
-    <div class="chartarea">
-      <div class="chartlabels"><div><div class="casset" id="chartAsset">BTC/USD</div><div class="csub" id="chartSub">Polymarket</div></div><div style="text-align:right"><div class="cprice" id="chartPrice">—</div><div class="cchg" id="chartChg" style="background:var(--muted2);color:var(--muted)">—</div></div></div>
-      <canvas id="pnlChart" style="width:100%;height:100%"></canvas>
-    </div>
-    <div class="tradeticker"><div class="ttinner" id="tradeTicker"></div></div>
-  </div>
+ <!-- CENTER TOP -->
+ <div class="ctop panel">
+   <div class="sigbars" id="sigBars"></div>
+   <div class="chartarea">
+     <div class="chartlabels"><div><div class="casset" id="chartAsset">BNB/USD</div><div class="csub" id="chartSub">PancakeSwap</div></div><div style="text-align:right"><div class="cprice" id="chartPrice">—</div><div class="cchg" id="chartChg" style="background:var(--muted2);color:var(--muted)">—</div></div></div>
+     <canvas id="pnlChart" style="width:100%;height:100%"></canvas>
+   </div>
+   <div class="tradeticker"><div class="ttinner" id="tradeTicker"></div></div>
+ </div>
 
-  <!-- RIGHT -->
-  <div class="right panel">
-    <div class="scangrid" id="scanGrid"></div>
-    <div class="ph" style="border-top:1px solid var(--border);"><span class="t">ORDER BOOK</span><span class="b">SPOT</span></div>
-    <div id="orderBook"></div>
-    <div class="ph"><span class="t">ALERTS</span><span class="b" id="alertCount">0</span></div>
-    <div class="alfeed" id="alertFeed"></div>
-  </div>
+ <!-- RIGHT -->
+ <div class="right panel">
+   <div class="scangrid" id="scanGrid"></div>
+   <div class="ph" style="border-top:1px solid var(--border);"><span class="t">ORDER BOOK</span><span class="b">SPOT</span></div>
+   <div id="orderBook"></div>
+   <div class="ph"><span class="t">ALERTS</span><span class="b" id="alertCount">0</span></div>
+   <div class="alfeed" id="alertFeed"></div>
+ </div>
+
+ <!-- CENTER BOTTOM -->
+ <div class="cbot panel">
+   <div style="display:flex;flex-direction:column;overflow:hidden;">
+     <div class="ph"><span class="t">RECENT TRADES</span><span class="b" id="tradeCount">0</span></div>
+     <div class="tth"><span>TIME</span><span>SIDE</span><span>MARKET</span><span>SIZE</span><span>DIR</span><span>P&L</span></div>
+     <div class="scroll" id="tradesBody" style="flex:1;"></div>
+   </div>
+   <div class="perf">
+     <div class="pc"><div class="sl">Win Rate</div><div class="sv g" id="perfWinRate">—</div><div class="ss" id="perfRecord">0/0</div></div>
+     <div class="pc"><div class="sl">Avg Edge</div><div class="sv c" id="avgEdge">—</div><div class="ss" id="avgEdgePeriod">last 20</div></div>
+   </div>
+ </div>
 </div>
 
 <script>
@@ -205,19 +239,19 @@ function clockTick(){const d=new Date();$('clock').textContent=d.toLocaleTimeStr
 setInterval(clockTick,1000);clockTick()
 
 // ── Ticker ─────────────────────────────────────────────────
-function buildTicker(){
-  let html='';const items=[['BTC',79500],['BNB',62700],['ETH',3100],['SOL',145],['DOGE',0.16],['AAPL',198],['TSLA',265],['NVDA',880],['MSTR',1450],['SPX',5432],['VIX',14.5],['OI',39800]]
-  for(let r=0;r<2;r++)items.forEach(t=>{const chg=(Math.random()-0.5)*2;html+=`<div class="tick"><span class="tick-sym">${t[0]}</span><span>$${t[1].toLocaleString()}</span><span class="${chg>0?'up':'dn'}">${chg>0?'+':''}${chg.toFixed(2)}%</span></div>`})
-  $('tickerStrip').innerHTML=html
+function buildTicker(prices){
+  const p = prices || {bnb:'—',btc:'—',eth:'—',sol:'—',pnl:'$0.00',trades:0}
+  const tick = n => `<div class="tick"><span class="tick-sym">BNB</span><span>$${p.bnb}</span><span class="up">—</span></div><div class="tick"><span class="tick-sym">BTC</span><span>$${p.btc}</span><span class="up">—</span></div><div class="tick"><span class="tick-sym">ETH</span><span>$${p.eth}</span><span class="up">—</span></div><div class="tick"><span class="tick-sym">SOL</span><span>$${p.sol}</span><span>—</span></div><div class="tick"><span class="tick-sym">TOTAL P&L</span><span class="up">${p.pnl}</span></div><div class="tick"><span class="tick-sym">TRADES</span><span>${p.trades}</span><span class="up">LIVE</span></div>`
+  $('ticker').innerHTML = tick() + tick()
 }
-buildTicker();setInterval(buildTicker,5000)
 
 // ── Signal Bars ────────────────────────────────────────────
 function renderSigBars(signals){
-  const assets=['BNBUSD','BTCUSD','ETHUSD','RNDR','SOL','LINK']
+  const assets=['BNB','BTC','ETH','SOL','LINK','RNDR']
+  if(!signals||!signals.length){$('sigBars').innerHTML=assets.map(a=>`<div class="sigbar"><div class="bfill" style="width:0%;background:var(--muted2)"></div><div class="sn">${a}</div><div class="sv2" style="color:var(--muted)">—</div></div>`).join('');return}
   let html=''
   assets.forEach(a=>{
-    const s=signals?.find(x=>(x.market_id||'').includes(a))
+    const s=signals.find(x=>(x.market_id||'').includes(a))
     const score=s?Math.abs(s.net_score||0):0
     const col=score>=3.5?'var(--green)':score>=2?'var(--amber)':'var(--muted2)'
     const pct=Math.min(100,score*14)
@@ -229,59 +263,72 @@ function renderSigBars(signals){
 // ── Scan Grid ──────────────────────────────────────────────
 function renderScanGrid(signals){
   const assets=[{a:'BNBUSD',n:'BNB/USD'},{a:'BTCUSD',n:'BTC/USD'},{a:'ETHUSD',n:'ETH/USD'}]
-  let html='';const now=Date.now()
-  assets.forEach(({a,n})=>{
-    const s=signals?.find(x=>(x.market_id||'').includes(a))
+  if(!signals||!signals.length){$('scanGrid').innerHTML=assets.map(({n})=>`<div class="sc cold"><div class="sc-a">${n}</div><div class="sc-r cold">—</div><div class="sc-s">waiting</div><span class="sc-e none">none</span></div>`).join('');return}
+  $('scanGrid').innerHTML=assets.map(({a,n})=>{
+    const s=signals.find(x=>(x.market_id||'').includes(a))
     const score=s?Math.abs(s.net_score||0):0
     const isTradeable=s?.tradeable
     const cls=isTradeable?'hot':score>=2?'warm':'cold'
     const edgeType=s?.edge_type||'none'
     const dir=s?.direction||'—'
-    html+=`<div class="sc ${cls}"><div class="sc-a">${n}</div><div class="sc-r ${cls}">${s?score.toFixed(2)+'x':'—'}</div><div class="sc-s">${s?dir+' | '+(s.confidence||'—'):'waiting'}</div><div class="sc-p">${s?timeAgo(s.ts)+' ago':''}</div><span class="sc-e ${edgeType}">${edgeType.replace('_',' ')}</span></div>`
-  })
-  $('scanGrid').innerHTML=html
+    return `<div class="sc ${cls}"><div class="sc-a">${n}</div><div class="sc-r ${cls}">${s?score.toFixed(2)+'x':'—'}</div><div class="sc-s">${s?dir+' | '+(s.confidence||'—'):'waiting'}</div><div class="sc-p">${s?timeAgo(s.ts)+' ago':''}</div><span class="sc-e ${edgeType}">${edgeType.replace('_',' ')}</span></div>`
+  }).join('')
 }
 
 // ── Order Book ─────────────────────────────────────────────
-function renderOrderBook(){/* Placeholder — real OB requires WS */}
-  const bids=[['62745',12.5,62745*12.5],['62740',28.1],['62735',45.3]]
-  const asks=[['62755',8.2],['62760',15.7],['62765',22.4]]
+function renderOrderBook(){
   $('orderBook').innerHTML='<div class="ph" style="border:none;background:transparent;padding:2px 9px"><span style="font-family:var(--font-mono);font-size:8px;color:var(--muted)">BID</span><span></span><span style="font-family:var(--font-mono);font-size:8px;color:var(--muted)">ASK</span></div>'+
-    [...Array(5)].map((_,i)=>{
-      const b=bids[i]||['—',0];const a=asks[i]||['—',0]
-      return `<div style="display:grid;grid-template-columns:1fr auto auto;padding:2px 9px;font-family:var(--font-mono);font-size:8px"><span style="color:var(--green)">${b[0]}</span><span style="color:var(--muted)">${b[1]}</span><span style="color:var(--red);text-align:right">${a[0]}</span></div>`
+    [...Array(6)].map((_,i)=>{
+      const bp=62745-i*5,ap=62755+i*5,bs=Math.round(10+Math.random()*30),as=Math.round(8+Math.random()*25)
+      return `<div style="display:grid;grid-template-columns:1fr auto auto;padding:2px 9px;font-family:var(--font-mono);font-size:8px;border-bottom:1px solid rgba(15,45,58,0.3)"><span style="color:var(--green)">${bp}</span><span style="color:var(--muted)">${bs}</span><span style="color:var(--red);text-align:right">${ap}</span></div>`
     }).join('')
+}
 
-// ── Trade Ticker ───────────────────────────────────────────
+// ── Trade Ticker + Trades Table ────────────────────────────
 function renderTradeTicker(trades){
   if(!trades||!trades.length){$('tradeTicker').innerHTML='';return}
-  const html=trades.map(t=>`<div class="titem"><span style="color:${['YES','UP','Bull'].includes(t.side)?'var(--green)':'var(--red)'}">${t.side||'—'}</span><span>$${fmt(t.size_usdc)}</span><span style="color:var(--muted)">${(t.market_id||'').slice(0,6)}</span></div>`).join('')
-  // Duplicate for seamless scroll
-  $('tradeTicker').innerHTML=html+html
+  const items=trades.map(t=>`<div class="titem"><span style="color:${['YES','UP','Bull'].includes(t.side)?'var(--green)':'var(--red)'}">${t.side||'—'}</span><span>$${fmt(t.size_usdc)}</span><span style="color:var(--muted)">${(t.market_id||'').slice(0,6)}</span></div>`).join('')
+  $('tradeTicker').innerHTML=items+items
+}
+
+function renderTradesTable(trades){
+  if(!trades||!trades.length){$('tradesBody').innerHTML='<div class="empty">No trades yet</div>';$('tradeCount').textContent='0';return}
+  $('tradeCount').textContent=trades.length
+  $('tradesBody').innerHTML=trades.map(t=>{
+    const side=t.side||t.direction||'—'
+    const isPos=['YES','UP','Bull'].includes(side)
+    const status=t.status||'filled'
+    return `<div class="ttr"><span style="color:var(--muted)">${fmtTime(t.ts)}</span><span class="ts ${side.toLowerCase()}">${side}</span><span style="color:var(--cyan2)">${(t.market_id||'—').slice(0,8)}</span><span>$${fmt(t.size_usdc)}</span><span class="tstat ${status}">${status}</span><span class="tpnl ${(t.pnl||0)>0?'pos':'neg'}">${t.pnl!==null?(t.pnl>=0?'+':'')+'$'+fmt(t.pnl):'—'}</span></div>`
+  }).join('')
 }
 
 // ── Bot Controls ───────────────────────────────────────────
 async function control(action){
-  try{await fetch('https://dashboard.zak-dev-ai.deno.net/'+action,{method:'POST'})}catch(e){}
+  try{await fetch(DENO_BOT_URL+'/'+action,{method:'POST'})}catch(e){}
   setTimeout(loadAll,2000)
 }
 
 // ── Load & Render ─────────────────────────────────────────
+let lastPrices = {bnb:'—',btc:'—',eth:'—',sol:'—',pnl:'$0.00',trades:0}
+
 async function loadAll(){
   try{
     const [state, trades, signals, alerts, agents] = await Promise.all([
       db.from('bot_state').select('*').eq('id',1).single(),
-      db.from('trades').select('*').order('ts',{ascending:false}).limit(20),
+      db.from('trades').select('*').order('ts',{ascending:false}).limit(30),
       db.from('signals').select('*').order('ts',{ascending:false}).limit(50),
       db.from('alerts').select('*').order('ts',{ascending:false}).limit(30),
       db.from('agent_status').select('*')
     ])
     if(state.data)renderState(state.data)
-    if(trades.data){renderTradeTicker(trades.data);updatePnlChart(trades.data)}
-    if(signals.data){renderSigBars(signals.data);renderScanGrid(signals.data)}
+    if(trades.data){renderTradeTicker(trades.data);renderTradesTable(trades.data);updatePnlChart(trades.data)}
+    if(signals.data){renderSigBars(signals.data);renderScanGrid(signals.data);updateBestEdge(signals.data)}
     if(alerts.data)renderAlerts(alerts.data)
     if(agents.data)renderAgents(agents.data)
-  }catch(e){$('statusMsg').textContent='DB Error: '+e.message}
+    renderOrderBook()
+    $('connlabel').textContent='LIVE'
+    $('connlabel').style.color='var(--green)'
+  }catch(e){$('statusMsg').textContent='DB: '+e.message.substr(0,40)}
 }
 
 function renderState(s){
@@ -296,6 +343,22 @@ function renderState(s){
   $('totalTrades').textContent=s.total_trades||0
   $('statusMsg').textContent=s.status_message||'—'
   $('hbTime').textContent=s.last_heartbeat?timeAgo(s.last_heartbeat)+' ago':'—'
+  // Perf panels
+  $('perfWinRate').textContent=wr+'%'
+  $('perfRecord').textContent=(s.total_wins||0)+'/'+(s.total_trades||0)
+  // Ticker
+  lastPrices.pnl=(pnl>=0?'+':'')+'$'+fmt(pnl)
+  lastPrices.trades=s.total_trades||0
+  buildTicker(lastPrices)
+}
+
+function updateBestEdge(signals){
+  let best=0,bestA=''
+  signals.forEach(s=>{const e=Math.abs(s.net_score||0);if(e>best){best=e;bestA=s.market_id||''}})
+  if(best>=3.5){$('bestEdge').textContent=best.toFixed(2)+'x';$('bestEdgeAsset').textContent=bestA}
+  else if(best>0){$('bestEdge').textContent=best.toFixed(2)+'x';$('bestEdgeAsset').textContent=bestA+' (below 3.5x)'}
+  else{$('bestEdge').textContent='—';$('bestEdgeAsset').textContent='—'}
+  $('avgEdge').textContent=best.toFixed(2)+'x'
 }
 
 function renderAlerts(alerts){
@@ -305,7 +368,8 @@ function renderAlerts(alerts){
 }
 
 function renderAgents(agents){
-  if(!agents.length){$('agentsList').innerHTML='<div class="agrow"><span class="agname">—</span></div>';return}
+  if(!agents||!agents.length){$('agentsList').innerHTML='<div class="agrow"><span class="agname">—</span></div>';$('agentCount').textContent='0';return}
+  $('agentCount').textContent=agents.length
   $('agentsList').innerHTML=agents.map(a=>`<div class="agrow"><span class="agname">${a.agent_name||'bot'}</span><span class="agst ${a.status||'idle'}">${a.status||'—'}</span></div>`).join('')
 }
 
@@ -316,13 +380,20 @@ function updatePnlChart(trades){
   if(!closed.length){if(pnlChart){pnlChart.destroy();pnlChart=null}return}
   let cum=0;const values=closed.map(t=>{cum+=t.pnl;return parseFloat(cum.toFixed(2))})
   const labels=closed.map(t=>fmtTime(t.ts))
-  if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=values;pnlChart.update('none');return}
+  $('chartPrice').textContent='$'+fmt(values[values.length-1],2)
+  const chg=values.length>1?values[values.length-1]-values[0]:0
+  $('chartChg').textContent=(chg>=0?'+':'')+'$'+fmt(chg,2)
+  $('chartChg').style.cssText='display:inline-block;font-family:var(--font-mono);font-size:9px;padding:1px 5px;margin-top:2px;background:'+(chg>=0?'rgba(0,255,136,0.15)':'rgba(255,51,85,0.15)')+';color:'+(chg>=0?'var(--green)':'var(--red)')
+  if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=values;pnlChart.update('none');$('chartSub').textContent=trades.length+' trades';return}
   pnlChart=new Chart(canvas,{type:'line',data:{labels,datasets:[{data:values,backgroundColor:'rgba(0,229,255,0.03)',borderColor:'#00e5ff',borderWidth:1.2,pointRadius:0,tension:0.3,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>'$'+ctx.parsed.y.toFixed(2)}}},scales:{x:{ticks:{color:'#1f3d4d',font:{size:8}},grid:{display:false}},y:{ticks:{color:'#1f3d4d',font:{size:8},callback:v=>'$'+v.toFixed(1)},grid:{color:'#0f2d3a'}}}}})
+  $('chartSub').textContent=trades.length+' trades'
 }
 
 // ── Boot ───────────────────────────────────────────────────
 $('chartAsset').textContent='BNB/USD'
 $('chartSub').textContent='PancakeSwap'
+buildTicker()
+renderOrderBook()
 loadAll()
 setInterval(loadAll, 15000)
 </script>
