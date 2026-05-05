@@ -77,6 +77,8 @@ async function runOracle(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, b
 }
 
 // ── SWARM STRATEGY ─────────────────────────────────────────────
+let lastSwarmTrade = 0
+
 async function runSwarm(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, btcPrice: number): Promise<void> {
   if (!STRATEGY_CONFIG.SWARM.enabled || strategyState.SWARM.paused) return
   await db.setAgentStatus('swarm-strategy', 'running', 'Running 5-agent swarm consensus')
@@ -90,7 +92,13 @@ async function runSwarm(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, bt
   const votes: ('UP'|'DOWN'|'SKIP')[] = []
 
   for (const p of paramSets) {
-    const signal = oracleEvaluate(candles, 0.5, { rsiPeriod: p.rsiPeriod, rsiOversold: p.rsiPeriod <= 10 ? 40 : p.rsiPeriod >= 25 ? 30 : 35, rsiOverbought: p.rsiPeriod <= 10 ? 65 : p.rsiPeriod >= 25 ? 75 : 70 })
+    // Each agent gets a slightly different price to create vote diversity
+    const noise = (Math.random() - 0.5) * 0.06
+    const signal = oracleEvaluate(candles, Math.max(0.1, Math.min(0.9, 0.5 + noise)), {
+      rsiPeriod: p.rsiPeriod,
+      rsiOversold: p.rsiPeriod <= 10 ? 40 : p.rsiPeriod >= 25 ? 30 : 35,
+      rsiOverbought: p.rsiPeriod <= 10 ? 65 : p.rsiPeriod >= 25 ? 75 : 70
+    })
     votes.push(signal.direction)
   }
 
@@ -125,6 +133,14 @@ async function runSwarm(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, bt
   if (votes.filter(v=>v==='SKIP').length >= 2) {
     await db.insertAlert('warning', 'swarm', `Swarm internal disagreement HIGH — ${votes.filter(v=>v==='SKIP').length} agents SKIP`)
   }
+
+  // Cooldown: max 1 SWARM trade per 30 min
+  const now = Date.now()
+  if (now - lastSwarmTrade < 30 * 60 * 1000) {
+    await db.setAgentStatus('swarm-strategy', 'idle', `Swarm: ${swarmDirection} ${(maxAgreement*100).toFixed(0)}% — cooldown (${Math.round((30*60*1000-(now-lastSwarmTrade))/60000)}m remaining)`)
+    return
+  }
+  lastSwarmTrade = now
 
   const botState = await db.getBotState() as Record<string, unknown>
   const bankroll = botState.current_bankroll as number ?? 30
@@ -200,6 +216,7 @@ const PCS_CONTRACTS = {
   ETHUSD: '0x1e5e5CF3652989A57736901D95F9eD2479e8C4D7'
 }
 let binanceLivePrice = 0
+let lastPhantomTrade = 0
 
 // Poll BNB price via REST instead of WebSocket (more reliable from Deno Deploy)
 async function pollBnbPrice() {
@@ -288,6 +305,13 @@ async function runPhantom(): Promise<void> {
   }
 
   if (bestSignal) {
+    // Cooldown: max 1 PHANTOM trade per 15 min
+    const now = Date.now()
+    if (now - lastPhantomTrade < 15 * 60 * 1000) {
+      await db.setAgentStatus('phantom-strategy', 'idle', `Phantom: edge found but cooldown active (${Math.round((15*60*1000-(now-lastPhantomTrade))/60000)}m remaining)`)
+      return
+    }
+    lastPhantomTrade = now
     await db.insertTrade({
       market_id: bestSignal.asset, side: bestSignal.side, size_usdc: bestSignal.sizeUsdc,
       price_target: 1 / bestSignal.payout, status: 'paper',
