@@ -10,6 +10,7 @@ import { evaluateEnsemble } from './strategy_ensemble.ts'
 import { calcPositionSize, updateStateAfterTrade } from './position_sizer.ts'
 import { fetchBtcMarkets, placeOrder, fetchOrderStatus } from './polymarket_client.ts'
 import { fetchBtcCandles } from './btc_data.ts'
+import { fetchLatestRounds, findPayoutOpportunity, isRoundOpen } from './pancake_prediction.ts'
 import * as db from './supabase_client.ts'
 import * as tg from './telegram.ts'
 
@@ -48,7 +49,7 @@ async function runTradingCycle(): Promise<void> {
     lastCandleTs = latestTs
 
     // 3. Get active BTC markets from Polymarket
-    const markets = await fetchBtcMarkets()
+    const markets = await fetchShortTermMarkets()
     if (markets.length === 0) {
       console.warn('[Bot] No active BTC markets found')
       await db.setAgentStatus('trading-bot', 'idle', 'No active markets')
@@ -260,13 +261,97 @@ async function sendHourlySummary(): Promise<void> {
   })
 }
 
+// ── PancakeSwap Prediction Cycle ────────────────────────────
+
+async function runPancakeCycle(): Promise<void> {
+  try {
+    console.log('[Pancake] Checking prediction rounds...')
+    const rounds = await fetchLatestRounds(5)
+    
+    if (rounds.length === 0) {
+      console.log('[Pancake] No rounds available')
+      return
+    }
+
+    const latest = rounds[0]
+    const open = isRoundOpen(latest)
+    
+    if (!open) {
+      console.log('[Pancake] No open round available')
+      return
+    }
+
+    const opportunity = findPayoutOpportunity(rounds)
+
+    if (opportunity) {
+      const r = opportunity.round
+      console.log(`[Pancake] OPPORTUNITY! Epoch ${r.epoch}: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(2)}x`)
+      console.log(`  Bull: ${r.bullAmount.toFixed(2)} | Bear: ${r.bearAmount.toFixed(2)} | Total: ${r.totalAmount.toFixed(2)}`)
+      
+      await db.insertAlert('info', 'pancake',
+        `Payout opportunity: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(2)}x (epoch ${r.epoch})`)
+      
+      await tg.alertTrade({
+        side: opportunity.side === 'Bull' ? 'YES' : 'NO',
+        marketQuestion: `BNB/USD Round ${r.epoch}`,
+        sizeUsdc: 0,  // paper only for now
+        price: r.lockPrice ?? 0,
+        netScore: opportunity.payoutMultiplier,
+        confidence: opportunity.confidence,
+        edge: opportunity.payoutMultiplier - 1
+      })
+    } else {
+      console.log(`[Pancake] No opportunity (best payout: bull=${latest.payoutBull.toFixed(2)}x bear=${latest.payoutBear.toFixed(2)}x)`)
+    }
+
+    await db.updateBotState({
+      status_message: `Pancake: bull=${latest.payoutBull.toFixed(1)}x bear=${latest.payoutBear.toFixed(1)}x` + 
+        (opportunity ? ` SIGNAL: ${opportunity.side} @ ${opportunity.payoutMultiplier.toFixed(1)}x` : '')
+    })
+
+  } catch (err) {
+    console.error('[Pancake] Error:', err)
+    await db.insertAlert('warning', 'pancake', `Error: ${String(err).slice(0, 100)}`)
+  }
+}
+
+// ── Expanded Polymarket market filter ───────────────────────
+
+/** Fetch any short-term markets closing within 24h */
+async function fetchShortTermMarkets() {
+  const allMarkets = await fetchBtcMarkets()
+  // If no BTC 5-min markets exist, return any available market
+  if (allMarkets.length === 0) {
+    // Try broader search: any active market with volume
+    const GAMMA_BASE = 'https://gamma-api.polymarket.com'
+    const res = await fetch(`${GAMMA_BASE}/markets?active=true&closed=false&limit=50`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return data
+      .filter((m: any) => !m.closed && m.active && m.volumeNum > 1000 && m.outcomePrices?.length >= 2)
+      .map((m: any) => ({
+        conditionId: m.conditionId,
+        question: m.question,
+        endDateIso: m.endDateIso,
+        yesToken: m.clobTokenIds?.[0] ?? '',
+        noToken: m.clobTokenIds?.[1] ?? '',
+        yesPrice: parseFloat(m.outcomePrices?.[0] ?? '0.5'),
+        noPrice: parseFloat(m.outcomePrices?.[1] ?? '0.5'),
+        volume: m.volumeNum ?? 0,
+        active: m.active
+      }))
+  }
+  return allMarkets
+}
+
 // ── Scheduler ────────────────────────────────────────────────
 
 let cycleCount = 0
 
 async function tick(): Promise<void> {
   cycleCount++
-  await runTradingCycle()
+  await runPancakeCycle()       // PancakeSwap first (always has markets)
+  await runTradingCycle()       // Polymarket (when markets available)
   await checkPendingOrders()
   // Send hourly summary every 12 cycles (12 × 5min = 60min)
   if (cycleCount % 12 === 0) await sendHourlySummary()
