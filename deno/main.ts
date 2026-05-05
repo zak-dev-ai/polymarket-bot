@@ -6,6 +6,7 @@
 // ============================================================
 
 import { evaluate } from './signal_engine.ts'
+import { evaluateEnsemble } from './strategy_ensemble.ts'
 import { calcPositionSize, updateStateAfterTrade } from './position_sizer.ts'
 import { fetchBtcMarkets, placeOrder, fetchOrderStatus } from './polymarket_client.ts'
 import { fetchBtcCandles } from './btc_data.ts'
@@ -92,52 +93,55 @@ async function runTradingCycle(): Promise<void> {
       active: true
     })
 
-    // 7. Run signal engine
-    const signal = evaluate(candles, targetMarket.yesPrice)
+    // 7. Run ensemble (multi-strategy) + original quant (detailed data)
+    const quant = evaluate(candles, targetMarket.yesPrice)
+    const ensemble = evaluateEnsemble(candles, targetMarket.yesPrice)
 
-    console.log(`[Signal] direction=${signal.direction} net=${signal.netScore.toFixed(2)} tradeable=${signal.tradeable}`)
+    console.log(`[Ensemble] ${ensemble.votes.map(v => v.name + '=' + v.direction + '(' + v.confidence + ')').join(' | ')}`)
+    console.log(`[Signal] consensus=${ensemble.consensus} net=${ensemble.netScore.toFixed(2)} tradeable=${ensemble.tradeable} (original quant: ${quant.direction} net=${quant.netScore.toFixed(1)})`)
 
-    // 8. Save signal to DB
+    // 8. Save signal to DB (use quant data for raw indicators, ensemble for decision)
     const signalId = await db.insertSignal({
       market_id: targetMarket.conditionId,
-      rsi: signal.rsi,
-      ema9: signal.ema9,
-      ema21: signal.ema21,
-      bb_upper: signal.bbUpper,
-      bb_lower: signal.bbLower,
-      bb_mid: signal.bbMid,
-      btc_price: signal.btcPrice,
-      volume_spike: signal.volumeSpike,
-      candle_pattern: signal.candlePattern,
-      momentum: signal.momentum,
-      vote_rsi: signal.voteRsi,
-      vote_ema: signal.voteEma,
-      vote_bb: signal.voteBb,
-      vote_candle: signal.voteCandle,
-      vote_volume: signal.voteVolume,
-      vote_momentum: signal.voteMomentum,
-      net_score: signal.netScore,
-      direction: signal.direction,
-      confidence: signal.confidence,
-      edge: Math.abs(signal.signalProb - targetMarket.yesPrice),
-      signal_prob: signal.signalProb,
+      rsi: quant.rsi,
+      ema9: quant.ema9,
+      ema21: quant.ema21,
+      bb_upper: quant.bbUpper,
+      bb_lower: quant.bbLower,
+      bb_mid: quant.bbMid,
+      btc_price: quant.btcPrice,
+      volume_spike: quant.volumeSpike,
+      candle_pattern: quant.candlePattern,
+      momentum: quant.momentum,
+      vote_rsi: quant.voteRsi,
+      vote_ema: quant.voteEma,
+      vote_bb: quant.voteBb,
+      vote_candle: quant.voteCandle,
+      vote_volume: quant.voteVolume,
+      vote_momentum: quant.voteMomentum,
+      net_score: ensemble.netScore,  // use ensemble net score
+      direction: ensemble.consensus,  // use ensemble consensus
+      confidence: ensemble.confidence,
+      edge: ensemble.edge,
+      signal_prob: ensemble.signalProb,
       market_price: targetMarket.yesPrice,
-      tradeable: signal.tradeable
+      tradeable: ensemble.tradeable
     })
 
     // 9. If not tradeable, update status and return
-    if (!signal.tradeable) {
-      await db.setAgentStatus('trading-bot', 'running', `Signal: ${signal.direction} (${signal.confidence}) — not tradeable`)
-      await db.updateBotState({ status_message: `Signal: ${signal.direction} net=${signal.netScore.toFixed(1)} — waiting for edge` })
+    if (!ensemble.tradeable) {
+      const voteInfo = ensemble.votes.map(v => `${v.name}:${v.direction}`).join(' ')
+      await db.setAgentStatus('trading-bot', 'running', `Ensemble: ${ensemble.consensus} (${ensemble.confidence}) — waiting for edge`)
+      await db.updateBotState({ status_message: `Signal ${ensemble.consensus} net=${ensemble.netScore.toFixed(1)} | ${voteInfo}` })
       return
     }
 
     // 10. Calculate position size
-    const tradeSide: 'YES' | 'NO' = signal.direction === 'UP' ? 'YES' : 'NO'
+    const tradeSide: 'YES' | 'NO' = ensemble.consensus === 'UP' ? 'YES' : 'NO'
     const marketOdds = tradeSide === 'YES' ? targetMarket.yesPrice : targetMarket.noPrice
-    const edge = Math.abs(signal.signalProb - targetMarket.yesPrice)
+    const edge = ensemble.edge
 
-    const sizing = calcPositionSize(state, signal.signalProb, marketOdds, edge)
+    const sizing = calcPositionSize(state, ensemble.signalProb, marketOdds, edge)
 
     if (!sizing.allowed) {
       console.log(`[Bot] Trade blocked: ${sizing.reason}`)
