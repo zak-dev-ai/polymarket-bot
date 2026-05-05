@@ -201,12 +201,20 @@ const PCS_CONTRACTS = {
 }
 let binanceLivePrice = 0
 
-function connectBinanceWS() {
-  const ws = new WebSocket('wss://stream.binance.us:9443/ws/bnbusdt@trade')
-  ws.onmessage = (e) => { binanceLivePrice = parseFloat(JSON.parse(e.data).p) }
-  ws.onclose = () => setTimeout(connectBinanceWS, 3000)
-  ws.onerror = () => ws.close()
+// Poll BNB price via REST instead of WebSocket (more reliable from Deno Deploy)
+async function pollBnbPrice() {
+  try {
+    const r = await fetch('https://api.binance.us/api/v3/ticker/price?symbol=BNBUSDT')
+    if (r.ok) { binanceLivePrice = parseFloat((await r.json()).price); return }
+  } catch {}
+  try {
+    const r = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BNBUSDT')
+    const d = await r.json()
+    binanceLivePrice = parseFloat(d.result?.list?.[0]?.lastPrice ?? binanceLivePrice)
+  } catch {}
 }
+setInterval(pollBnbPrice, 10000)
+pollBnbPrice()
 
 async function getPCSRound(contract: string) {
   try {
@@ -380,8 +388,6 @@ async function runOrchestrator(): Promise<void> {
 
 // ── Boot ─────────────────────────────────────────────────────
 console.log('[AURELIA v3] Booting — Oracle | Swarm | Prophet | Phantom | AI-Evaluation')
-connectBinanceWS()
-
 await Promise.allSettled([
   db.setAgentStatus('oracle-strategy', 'idle', 'Ready'),
   db.setAgentStatus('swarm-strategy', 'idle', 'Ready'),
