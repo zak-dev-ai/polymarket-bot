@@ -54,7 +54,7 @@ async function runOracle(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, b
   for (const market of polyMarkets.slice(0, 2)) {
     const signal = oracleEvaluate(candles, market.yesPrice)
     const edge = Math.abs(signal.signalProb - market.yesPrice)
-    if (!signal.tradeable || Math.abs(signal.netScore) < 3 || signal.confidence !== 'HIGH' || edge < 0.08) continue
+    if (!signal.tradeable || Math.abs(signal.netScore) < 2.5 || edge < 0.06) continue
 
     const botState = await db.getBotState() as Record<string, unknown>
     const bankroll = botState.current_bankroll as number ?? 30
@@ -89,8 +89,8 @@ async function runSwarm(candles: Awaited<ReturnType<typeof fetchBtcCandles>>, bt
   ]
   const votes: ('UP'|'DOWN'|'SKIP')[] = []
 
-  for (const _ of paramSets) {
-    const signal = oracleEvaluate(candles, 0.5)
+  for (const p of paramSets) {
+    const signal = oracleEvaluate(candles, 0.5, { rsiPeriod: p.rsiPeriod, rsiOversold: p.rsiPeriod <= 10 ? 40 : p.rsiPeriod >= 25 ? 30 : 35, rsiOverbought: p.rsiPeriod <= 10 ? 65 : p.rsiPeriod >= 25 ? 75 : 70 })
     votes.push(signal.direction)
   }
 
@@ -258,8 +258,8 @@ async function runPhantom(): Promise<void> {
     if (!round || round.totalBnb < 3 || round.secondsLeft < 30) continue
     let side: 'UP'|'DOWN' | null = null; let payout = 0; let edgeType = 'none'
 
-    if (round.upPayout >= 3.5 && round.upPayout <= 8 && round.bullPct < 35) { side = 'UP'; payout = round.upPayout; edgeType = 'payout_ratio' }
-    else if (round.downPayout >= 3.5 && round.downPayout <= 8 && round.bearPct < 35) { side = 'DOWN'; payout = round.downPayout; edgeType = 'payout_ratio' }
+    if (round.upPayout >= 2.5 && round.upPayout <= 8 && round.bullPct < 35) { side = 'UP'; payout = round.upPayout; edgeType = 'payout_ratio' }
+    else if (round.downPayout >= 2.5 && round.downPayout <= 8 && round.bearPct < 35) { side = 'DOWN'; payout = round.downPayout; edgeType = 'payout_ratio' }
 
     if (round.secondsLeft <= 25 && binanceLivePrice > 0) {
       const lagSide: 'UP'|'DOWN' = binanceLivePrice > 300 ? 'UP' : 'DOWN'

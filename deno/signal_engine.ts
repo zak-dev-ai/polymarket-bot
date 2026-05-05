@@ -130,20 +130,24 @@ export function calcVolumeSpike(volumes: number[], threshold = 1.8): boolean {
 
 // ── Voting logic ─────────────────────────────────────────────
 
-function voteRsi(rsi: number, ema9: number, ema21: number): number {
+function voteRsi(rsi: number, ema9: number, ema21: number, overrides?: { rsiOversold?: number; rsiOverbought?: number }): number {
   const emasBullish = ema9 > ema21
   const emasBearish = ema9 < ema21
+  const os = overrides?.rsiOversold ?? 35
+  const ob = overrides?.rsiOverbought ?? 70
+  const osMild = os + 5
+  const obMild = ob - 5
 
   // Ignore RSI when it's just trend momentum
-  if (rsi >= 80 && emasBullish) return 0   // strong uptrend — not a reversal signal
-  if (rsi <= 20 && emasBearish) return 0   // strong downtrend — not a reversal signal
+  if (rsi >= ob + 10 && emasBullish) return 0
+  if (rsi <= os - 15 && emasBearish) return 0
 
-  if (rsi < 35 && emasBullish) return 2.5  // oversold bounce UP — strong signal
-  if (rsi < 40 && emasBullish) return 1.5  // mildly oversold + bullish EMA
-  if (rsi > 70 && emasBearish) return -2.5 // overbought rejection DOWN
-  if (rsi > 65 && emasBearish) return -1.5
-  if (rsi < 45) return 0.5                 // weak bullish lean
-  if (rsi > 55) return -0.5                // weak bearish lean
+  if (rsi < os && emasBullish) return 2.5
+  if (rsi < osMild && emasBullish) return 1.5
+  if (rsi > ob && emasBearish) return -2.5
+  if (rsi > obMild && emasBearish) return -1.5
+  if (rsi < 45) return 0.5
+  if (rsi > 55) return -0.5
   return 0
 }
 
@@ -222,7 +226,8 @@ function getConfidence(netScore: number): 'LOW' | 'MEDIUM' | 'HIGH' | 'SKIP' {
 
 export function evaluate(
   candles: Candle[],         // at least 25 candles, most recent last
-  marketYesPrice: number     // current Polymarket YES price (0–1)
+  marketYesPrice: number,    // current Polymarket YES price (0–1)
+  params?: { rsiPeriod?: number; rsiOversold?: number; rsiOverbought?: number }
 ): SignalResult {
   if (candles.length < 22) {
     return emptySignal(candles[candles.length - 1]?.close ?? 0, marketYesPrice)
@@ -234,7 +239,7 @@ export function evaluate(
   const price = latestCandle.close
 
   // Calculate indicators
-  const rsi = calcRsi(closes)
+  const rsi = calcRsi(closes, params?.rsiPeriod ?? 14)
   const ema9arr = calcEma(closes, 9)
   const ema21arr = calcEma(closes, 21)
   const ema9 = ema9arr[ema9arr.length - 1]
@@ -245,7 +250,7 @@ export function evaluate(
   const volumeSpike = calcVolumeSpike(volumes)
 
   // Cast votes (signed)
-  const vRsi = voteRsi(rsi, ema9, ema21)
+  const vRsi = voteRsi(rsi, ema9, ema21, params ? { rsiOversold: params.rsiOversold, rsiOverbought: params.rsiOverbought } : undefined)
   const vEma = voteEma(price, ema9, ema21)
   const vBb = voteBb(price, bb)
   const vCandle = voteCandlePattern(candlePattern)
