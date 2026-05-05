@@ -42,8 +42,13 @@
   --amber:#ffcc00;
   --blue:#1e90ff;--blue2:#0070e0;
 
-  /* Strategy colors */
+  /* Strategy colors — original */
   --oracle:#00ffd1;--swarm:#ff6b35;--prophet:#a855f7;--phantom:#ffd700;--vibe:#00d4ff;--spectre:#ff3d8a;
+  /* Strategy colors — NEW BOTS */
+  --nexus:#39ff14;--nexus2:#2acc0e;      /* neon green  — Solana sniper */
+  --genesis:#ff9500;--genesis2:#e07800; /* amber       — new token hunter */
+  --hydra:#00cfff;--hydra2:#009fcc;     /* ice blue    — multi-chain arb */
+  --phantomx:#bf5fff;--phantomx2:#9030e0; /* violet    — Hyperliquid perp */
 
   /* Text */
   --text:#d0e0f0;--text2:#8aaac8;--text3:#5a7898;--muted:#2e4560;
@@ -710,9 +715,141 @@ body::after{
 .perf-lbl{font-family:var(--font-mono);font-size:8px;color:var(--text3);letter-spacing:1px;margin-bottom:3px;}
 .perf-val{font-family:var(--font-orb);font-size:var(--sm-num);font-weight:700;color:var(--text);}
 
+.t-strat.nexus{color:var(--nexus);border-color:rgba(57,255,20,0.2);}
+.t-strat.genesis{color:var(--genesis);border-color:rgba(255,149,0,0.2);}
+.t-strat.hydra{color:var(--hydra);border-color:rgba(0,207,255,0.2);}
+.t-strat.phantomx{color:var(--phantomx);border-color:rgba(191,95,255,0.2);}
+
 /* ═══════════════════════════════════════
-   OUTER WRAPPER
+   NEW SNIPER PANEL — multi-chain token radar
    ═══════════════════════════════════════ */
+#sniperPanel{
+  position:relative;z-index:190;
+  background:rgba(0,0,0,0.9);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  overflow:hidden;
+}
+.sniper-header{
+  display:flex;align-items:center;gap:12px;
+  padding:5px 16px;
+  border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,0.6);
+}
+.sniper-title{
+  font-family:var(--font-orb);font-size:9px;
+  color:var(--nexus);letter-spacing:3px;
+}
+.sniper-subtitle{
+  font-family:var(--font-mono);font-size:9px;
+  color:var(--muted);
+}
+.sniper-grid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:1px;background:var(--border);
+}
+.sniper-chain{
+  background:var(--surface);
+  padding:8px 12px;
+  position:relative;overflow:hidden;
+}
+.sniper-chain::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--cc);box-shadow:0 0 6px var(--cc);
+}
+.sc-chain-lbl{
+  font-family:var(--font-mono);font-size:8px;
+  color:var(--cc,var(--muted));letter-spacing:2px;
+  display:flex;align-items:center;gap:5px;margin-bottom:5px;
+}
+.sc-chain-dot{width:5px;height:5px;border-radius:50%;background:var(--cc);}
+.sc-chain-stat{
+  font-family:var(--font-orb);font-size:16px;font-weight:700;
+  color:var(--text);line-height:1;
+}
+.sc-chain-sub{
+  font-family:var(--font-mono);font-size:8px;
+  color:var(--muted);margin-top:3px;
+}
+.sniper-feed{
+  display:flex;overflow-x:auto;gap:0;
+  height:28px;align-items:center;
+  background:rgba(0,0,0,0.7);
+  border-top:1px solid var(--border);
+}
+.sniper-feed::-webkit-scrollbar{height:0;}
+.sniper-feed-item{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:0 14px;border-right:1px solid var(--border);
+  white-space:nowrap;font-family:var(--font-mono);font-size:9px;
+  flex-shrink:0;
+}
+.sniper-tok{color:var(--nexus);}
+.sniper-age{color:var(--muted);}
+.sniper-score-high{color:var(--green);background:var(--green-bg);padding:1px 5px;border-radius:2px;}
+.sniper-score-med{color:var(--amber);background:rgba(255,204,0,0.08);padding:1px 5px;border-radius:2px;}
+
+/* ═══════════════════════════ NEW STRATEGY CARDS IN RIGHT PANEL */
+.strat-grid-new{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:1px;background:var(--border);
+  flex-shrink:0;
+  border-top:1px solid var(--border2);
+}
+.sc-new-divider{
+  grid-column:1/-1;
+  background:var(--panel);
+  padding:4px 12px;
+  font-family:var(--font-mono);font-size:8px;
+  color:var(--nexus);letter-spacing:3px;
+  border-top:1px solid rgba(57,255,20,0.2);
+  display:flex;align-items:center;gap:6px;
+}
+.sc-new-divider::before{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(57,255,20,0.3),transparent);}
+.sc-new-divider::after{content:'';flex:1;height:1px;background:linear-gradient(-90deg,rgba(57,255,20,0.3),transparent);}
+
+/* ═══════════════════════════ SNIPER TOKEN TABLE */
+.token-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:9px;}
+.token-table thead tr{background:rgba(0,0,0,0.6);}
+.token-table th{
+  padding:4px 8px;color:var(--muted);text-align:left;
+  font-size:8px;text-transform:uppercase;letter-spacing:1px;
+  border-bottom:1px solid var(--border);
+}
+.token-table td{
+  padding:4px 8px;border-bottom:1px solid rgba(25,37,53,0.4);
+  vertical-align:middle;
+}
+.token-table tr:hover td{background:rgba(0,0,0,0.3);}
+.tok-sym{color:var(--nexus);font-size:10px;font-family:var(--font-orb);}
+.tok-chain{font-size:7px;padding:1px 4px;border-radius:2px;border:1px solid;}
+.tok-chain.sol{color:#9945ff;border-color:rgba(153,69,255,0.3);}
+.tok-chain.eth{color:#627eea;border-color:rgba(98,126,234,0.3);}
+.tok-chain.bnb{color:var(--amber);border-color:rgba(255,204,0,0.3);}
+.tok-chain.hype{color:var(--phantomx);border-color:rgba(191,95,255,0.3);}
+.tok-score{
+  font-family:var(--font-orb);font-size:11px;font-weight:700;
+}
+.tok-score.hot{color:var(--green);}
+.tok-score.warm{color:var(--amber);}
+.tok-score.cold{color:var(--muted);}
+.tok-age{color:var(--text3);}
+.tok-action{font-size:8px;padding:2px 6px;border:1px solid;border-radius:2px;cursor:pointer;}
+.tok-action.buy{color:var(--green);border-color:var(--green-dim);}
+.tok-action.watch{color:var(--cyan);border-color:rgba(0,229,255,0.2);}
+.tok-action.skip{color:var(--muted);border-color:var(--border);}
+
+/* ═══════════════════════════ CHAIN RADAR MINI WIDGET */
+.chain-radar-bar{
+  display:flex;align-items:center;gap:6px;
+  padding:3px 12px;border-bottom:1px solid rgba(25,37,53,0.4);
+  font-family:var(--font-mono);font-size:9px;
+}
+.chain-radar-name{width:60px;color:var(--text3);flex-shrink:0;}
+.chain-radar-track{flex:1;background:var(--border);height:4px;border-radius:2px;overflow:hidden;}
+.chain-radar-fill{height:100%;border-radius:2px;transition:width 0.5s;}
+.chain-radar-val{width:36px;text-align:right;flex-shrink:0;}
 #wrapper{
   display:flex;flex-direction:column;
   height:100vh;overflow:hidden;
@@ -788,6 +925,12 @@ const DENO_BOT_URL = 'https://dashboard.zak-dev-ai.deno.net'
   <div class="s-tab" style="--tc:var(--phantom)" onclick="setStratTab('phantom',this)"><div class="td"></div><span class="s-name">PHANTOM</span><span class="s-badge" style="color:var(--phantom);border-color:rgba(255,215,0,0.3)">PAYOUT-ARB</span></div>
   <div class="s-tab" style="--tc:var(--vibe)" onclick="setStratTab('vibe',this)"><div class="td"></div><span class="s-name">VIBE</span><span class="s-badge" style="color:var(--vibe);border-color:rgba(0,212,255,0.3)">RESEARCH</span></div>
   <div class="s-tab" style="--tc:var(--spectre)" onclick="setStratTab('spectre',this)"><div class="td"></div><span class="s-name">SPECTRE</span><span class="s-badge" style="color:var(--spectre);border-color:rgba(255,61,138,0.3)">ELIZAOS</span></div>
+  <!-- ▼ NEW STRATEGY TABS ▼ -->
+  <div style="width:1px;background:var(--border2);margin:4px 4px;flex-shrink:0;"></div>
+  <div class="s-tab" style="--tc:var(--nexus)" onclick="setStratTab('nexus',this)"><div class="td"></div><span class="s-name">NEXUS</span><span class="s-badge" style="color:var(--nexus);border-color:rgba(57,255,20,0.3)">SOL-SNIPER</span></div>
+  <div class="s-tab" style="--tc:var(--genesis)" onclick="setStratTab('genesis',this)"><div class="td"></div><span class="s-name">GENESIS</span><span class="s-badge" style="color:var(--genesis);border-color:rgba(255,149,0,0.3)">NEW-TOKEN</span></div>
+  <div class="s-tab" style="--tc:var(--hydra)" onclick="setStratTab('hydra',this)"><div class="td"></div><span class="s-name">HYDRA</span><span class="s-badge" style="color:var(--hydra);border-color:rgba(0,207,255,0.3)">MULTI-ARB</span></div>
+  <div class="s-tab" style="--tc:var(--phantomx)" onclick="setStratTab('phantomx',this)"><div class="td"></div><span class="s-name">PHANTOM-X</span><span class="s-badge" style="color:var(--phantomx);border-color:rgba(191,95,255,0.3)">HYPE-PERP</span></div>
   <div style="flex:1;"></div>
   <div style="display:flex;align-items:center;gap:6px;padding:0 8px;font-family:var(--font-mono);font-size:9px;color:var(--muted);">
     <span>HB:</span><span id="hbdisp" style="color:var(--green)">—</span>
@@ -841,6 +984,64 @@ const DENO_BOT_URL = 'https://dashboard.zak-dev-ai.deno.net'
     <div class="stat-lbl">STREAK</div>
     <div class="stat-num" id="s-streak">—</div>
     <div class="stat-hint" id="s-streak-h">CURRENT</div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ NEW: MULTI-CHAIN SNIPER RADAR PANEL -->
+<div id="sniperPanel">
+  <div class="sniper-header">
+    <span class="sniper-title">⚡ MULTI-CHAIN SNIPER RADAR</span>
+    <span class="sniper-subtitle">— NEXUS · GENESIS · HYDRA · PHANTOM-X —</span>
+    <div style="flex:1;"></div>
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--nexus)" id="sniper-status">● SCANNING ALL CHAINS</span>
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:12px">TOKENS FOUND: <span id="sniper-count" style="color:var(--text2)">0</span></span>
+    <span style="font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:12px">LIVE ALERTS: <span id="sniper-alerts" style="color:var(--amber)">0</span></span>
+  </div>
+  <div class="sniper-grid">
+    <!-- SOLANA -->
+    <div class="sniper-chain" style="--cc:var(--nexus)">
+      <div class="sc-chain-lbl"><div class="sc-chain-dot"></div>SOLANA · NEXUS</div>
+      <div class="sc-chain-stat" id="sol-tokens">0</div>
+      <div class="sc-chain-sub" id="sol-vol">NEW TOKENS / 1H</div>
+      <div style="margin-top:5px;">
+        <div class="chain-radar-bar"><span class="chain-radar-name" style="color:var(--nexus)">MOMENTUM</span><div class="chain-radar-track"><div class="chain-radar-fill" id="sol-mom-fill" style="width:0%;background:var(--nexus)"></div></div><span class="chain-radar-val" id="sol-mom-val" style="color:var(--nexus)">0%</span></div>
+        <div class="chain-radar-bar"><span class="chain-radar-name">DEX VOL</span><div class="chain-radar-track"><div class="chain-radar-fill" id="sol-dex-fill" style="width:0%;background:var(--green2)"></div></div><span class="chain-radar-val" id="sol-dex-val" style="color:var(--text2)">—</span></div>
+      </div>
+    </div>
+    <!-- ETHEREUM -->
+    <div class="sniper-chain" style="--cc:#627eea">
+      <div class="sc-chain-lbl"><div class="sc-chain-dot"></div>ETHEREUM · GENESIS</div>
+      <div class="sc-chain-stat" id="eth-tokens">0</div>
+      <div class="sc-chain-sub" id="eth-vol">NEW TOKENS / 1H</div>
+      <div style="margin-top:5px;">
+        <div class="chain-radar-bar"><span class="chain-radar-name" style="color:#627eea">GAS GWEI</span><div class="chain-radar-track"><div class="chain-radar-fill" id="eth-gas-fill" style="width:0%;background:#627eea"></div></div><span class="chain-radar-val" id="eth-gas-val" style="color:#627eea">—</span></div>
+        <div class="chain-radar-bar"><span class="chain-radar-name">WHALE</span><div class="chain-radar-track"><div class="chain-radar-fill" id="eth-whale-fill" style="width:0%;background:var(--green2)"></div></div><span class="chain-radar-val" id="eth-whale-val" style="color:var(--text2)">0</span></div>
+      </div>
+    </div>
+    <!-- BNB CHAIN -->
+    <div class="sniper-chain" style="--cc:var(--amber)">
+      <div class="sc-chain-lbl"><div class="sc-chain-dot"></div>BNB CHAIN · HYDRA</div>
+      <div class="sc-chain-stat" id="bnb-tokens">0</div>
+      <div class="sc-chain-sub" id="bnb-vol">NEW TOKENS / 1H</div>
+      <div style="margin-top:5px;">
+        <div class="chain-radar-bar"><span class="chain-radar-name" style="color:var(--amber)">ARB SPREAD</span><div class="chain-radar-track"><div class="chain-radar-fill" id="bnb-spread-fill" style="width:0%;background:var(--amber)"></div></div><span class="chain-radar-val" id="bnb-spread-val" style="color:var(--amber)">0%</span></div>
+        <div class="chain-radar-bar"><span class="chain-radar-name">LIQUIDITY</span><div class="chain-radar-track"><div class="chain-radar-fill" id="bnb-liq-fill" style="width:0%;background:var(--green2)"></div></div><span class="chain-radar-val" id="bnb-liq-val" style="color:var(--text2)">—</span></div>
+      </div>
+    </div>
+    <!-- HYPERLIQUID -->
+    <div class="sniper-chain" style="--cc:var(--phantomx)">
+      <div class="sc-chain-lbl"><div class="sc-chain-dot"></div>HYPERLIQUID · PHANTOM-X</div>
+      <div class="sc-chain-stat" id="hype-oi">$—</div>
+      <div class="sc-chain-sub" id="hype-vol">OPEN INTEREST</div>
+      <div style="margin-top:5px;">
+        <div class="chain-radar-bar"><span class="chain-radar-name" style="color:var(--phantomx)">FUNDING</span><div class="chain-radar-track"><div class="chain-radar-fill" id="hype-fund-fill" style="width:50%;background:var(--phantomx)"></div></div><span class="chain-radar-val" id="hype-fund-val" style="color:var(--phantomx)">0%</span></div>
+        <div class="chain-radar-bar"><span class="chain-radar-name">LIQUIDATIONS</span><div class="chain-radar-track"><div class="chain-radar-fill" id="hype-liq-fill" style="width:0%;background:var(--red2)"></div></div><span class="chain-radar-val" id="hype-liq-val" style="color:var(--text2)">$—</span></div>
+      </div>
+    </div>
+  </div>
+  <!-- Live token discovery feed -->
+  <div class="sniper-feed" id="sniperFeed">
+    <span class="sniper-feed-item" style="color:var(--muted)">AURELIA NEXUS ENGINE INITIALIZING — SCANNING SOLANA · ETH · BNB · HYPERLIQUID...</span>
   </div>
 </div>
 
@@ -1014,7 +1215,7 @@ const DENO_BOT_URL = 'https://dashboard.zak-dev-ai.deno.net'
 
   <!-- ── RIGHT: STRATEGIES + SIGNALS + ALERTS ── -->
   <div class="panel" id="right">
-    <div class="ph"><span class="ph-title">🎯 STRATEGY MONITOR</span><span class="ph-badge live">6 LIVE</span></div>
+    <div class="ph"><span class="ph-title">🎯 STRATEGY MONITOR</span><span class="ph-badge live">10 LIVE</span></div>
 
     <div class="strat-grid">
       <div class="sc" style="--tc:var(--oracle)" onclick="openStratModal('oracle')">
@@ -1052,6 +1253,35 @@ const DENO_BOT_URL = 'https://dashboard.zak-dev-ai.deno.net'
         <div class="sc-val" id="sc-spectre">—</div>
         <div class="sc-sub">ElizaOS DeFAI</div>
         <div class="sc-badge idle" id="sb-spectre">IDLE</div>
+      </div>
+    </div>
+
+    <!-- ▼ NEW STRATEGY CARDS ▼ -->
+    <div class="strat-grid-new">
+      <div class="sc-new-divider">⚡ NEW ALPHA BOTS</div>
+      <div class="sc" style="--tc:var(--nexus)" onclick="openStratModal('nexus')">
+        <div class="sc-name">NEXUS</div>
+        <div class="sc-val" id="sc-nexus">—</div>
+        <div class="sc-sub">Solana sniper</div>
+        <div class="sc-badge idle" id="sb-nexus">IDLE</div>
+      </div>
+      <div class="sc" style="--tc:var(--genesis)" onclick="openStratModal('genesis')">
+        <div class="sc-name">GENESIS</div>
+        <div class="sc-val" id="sc-genesis">—</div>
+        <div class="sc-sub">New token hunter</div>
+        <div class="sc-badge idle" id="sb-genesis">IDLE</div>
+      </div>
+      <div class="sc" style="--tc:var(--hydra)" onclick="openStratModal('hydra')">
+        <div class="sc-name">HYDRA</div>
+        <div class="sc-val" id="sc-hydra">—</div>
+        <div class="sc-sub">Multi-chain arb</div>
+        <div class="sc-badge idle" id="sb-hydra">IDLE</div>
+      </div>
+      <div class="sc" style="--tc:var(--phantomx)" onclick="openStratModal('phantomx')">
+        <div class="sc-name">PHANTOM-X</div>
+        <div class="sc-val" id="sc-phantomx">—</div>
+        <div class="sc-sub">Hyperliquid perp</div>
+        <div class="sc-badge idle" id="sb-phantomx">IDLE</div>
       </div>
     </div>
 
@@ -1169,7 +1399,7 @@ setInterval(() => {
 // PRICE FEED (Binance WebSocket)
 // ────────────────────────────────────────────────
 function connectPrices() {
-  const ws = new WebSocket('wss://stream.binance.us:9443/stream?streams=btcusdt@miniTicker/bnbusdt@miniTicker/ethusdt@miniTicker/solusdt@miniTicker')
+  const ws = new WebSocket('wss://stream.binance.com:9443/stream?streams=btcusdt@miniTicker/bnbusdt@miniTicker/ethusdt@miniTicker/solusdt@miniTicker')
   ws.onmessage = e => {
     const d = JSON.parse(e.data).data
     if(!d) return
