@@ -10,7 +10,7 @@ import * as tg from './telegram.ts'
 
 // ── Config ───────────────────────────────────────────────────
 const BSC_RPC = 'https://bsc-dataseed1.binance.org'
-const BINANCE_WS = 'wss://stream.binance.com:9443/ws/bnbusdt@trade'
+const BINANCE_WS = 'wss://stream.binance.us:9443/ws/bnbusdt@trade'
 
 // PancakeSwap Prediction v2 contract addresses (BNB Chain — verified)
 // Source: https://docs.pancakeswap.finance/play/prediction/prediction-faq.md
