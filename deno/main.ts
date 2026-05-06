@@ -360,6 +360,118 @@ async function runAIEvaluation(): Promise<void> {
   await db.setAgentStatus('ai-evaluation', 'idle', `Last scan: ${new Date().toLocaleTimeString()}`)
 }
 
+// ── Trade resolution ─────────────────────────────────────────
+// Resolves pending paper trades by checking actual market movement
+async function resolvePaperTrades(): Promise<void> {
+  try {
+    // Fetch all unresolved paper trades
+    const res = await fetch(
+      SUPABASE_URL + '/rest/v1/trades?status=eq.paper&select=id,market_id,side,size_usdc,notes,ts&order=ts.asc',
+      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY } }
+    )
+    if (!res.ok) return
+    const pendingTrades = await res.json() as Array<Record<string, unknown>>
+    if (!Array.isArray(pendingTrades) || pendingTrades.length === 0) return
+
+    const now = Date.now()
+    const currentBtc = await fetchBtcPrice().catch(() => 0)
+    const botState = await db.getBotState() as Record<string, unknown>
+    let bankroll = (botState.current_bankroll as number) ?? 30
+    let totalPnl = (botState.total_pnl as number) ?? 0
+    let totalWins = (botState.total_wins as number) ?? 0
+    let totalLosses = (botState.total_losses as number) ?? 0
+    let consecWins = (botState.consecutive_wins as number) ?? 0
+    let consecLosses = (botState.consecutive_losses as number) ?? 0
+    let totalTrades = (botState.total_trades as number) ?? 0
+
+    for (const trade of pendingTrades) {
+      const tradeTs = new Date(trade.ts as string).getTime()
+      const ageMin = (now - tradeTs) / 60000
+      const marketId = trade.market_id as string
+      const side = trade.side as string
+      const size = trade.size_usdc as number
+      const notes = trade.notes as string
+
+      // Only resolve trades older than 6 min (1 min buffer after 5-min PCS round)
+      if (ageMin < 6) continue
+
+      // Determine direction from the trade (YES=UP, NO=DOWN)
+      const direction = side === 'YES' ? 'UP' : 'DOWN'
+
+      // Fetch BTC price at trade time (approximate from recent candles)
+      // For simplicity: compare current BTC price to price at placement
+      let won = false
+      let payout = 0
+
+      if (marketId === 'BNBUSD-PCS' || marketId === 'SWARM-CONSENSUS') {
+        // For SWARM trades: check BTC movement direction
+        // We store a simulated outcome: fetch a snapshot from 6 min ago
+        const btcPriceAtTrade = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=6&endTime=' + tradeTs)
+          .then(r => r.json())
+          .then(d => parseFloat(d?.[0]?.[4] ?? '0'))
+          .catch(() => 0)
+        
+        if (btcPriceAtTrade > 0 && currentBtc > 0) {
+          const btcMove = (currentBtc - btcPriceAtTrade) / btcPriceAtTrade
+          const movedUp = btcMove > 0.001  // >0.1% up
+          const movedDown = btcMove < -0.001  // >0.1% down
+          
+          if (direction === 'UP' && movedUp) { won = true; payout = 1.9 }
+          else if (direction === 'DOWN' && movedDown) { won = true; payout = 1.9 }
+          else if ((direction === 'UP' && movedDown) || (direction === 'DOWN' && movedUp)) { won = false; payout = 0 }
+          else { won = false; payout = 0 }  // flat → loss
+        }
+      } else if (marketId === 'BNBUSD' || marketId === 'BTCUSD' || marketId === 'BTCUSD-PCS' || marketId === 'ETHUSD-PCS') {
+        // For PHANTOM/prophet trades: use payout from notes
+        const payoutMatch = notes.match(/([\d.]+)x/)
+        payout = payoutMatch ? parseFloat(payoutMatch[1]) : 0
+        const btcPriceAtTrade = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=6&endTime=' + tradeTs)
+          .then(r => r.json())
+          .then(d => parseFloat(d?.[0]?.[4] ?? '0'))
+          .catch(() => 0)
+        if (btcPriceAtTrade > 0 && currentBtc > 0) {
+          const btcMove = (currentBtc - btcPriceAtTrade) / btcPriceAtTrade
+          if (direction === 'UP' && btcMove > 0.001) { won = true }
+          else if (direction === 'DOWN' && btcMove < -0.001) { won = true }
+          else { won = false }
+        }
+      }
+
+      if (payout <= 0) payout = 1.9  // default payout if not found
+
+      const pnl = won ? size * (payout - 1) : -size
+      totalPnl += pnl
+      bankroll += pnl
+      totalTrades++
+      if (won) { totalWins++; consecWins++; consecLosses = 0 }
+      else { totalLosses++; consecLosses++; consecWins = 0 }
+
+      // Update the trade record
+      const status = won ? 'filled' : 'failed'
+      await fetch(SUPABASE_URL + '/rest/v1/trades?id=eq.' + trade.id, {
+        method: 'PATCH',
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, pnl })
+      }).catch(() => {})
+    }
+
+    if (pendingTrades.length > 0) {
+      await db.updateBotState({
+        current_bankroll: bankroll,
+        total_pnl: totalPnl,
+        total_trades: totalTrades,
+        total_wins: totalWins,
+        total_losses: totalLosses,
+        consecutive_wins: consecWins,
+        consecutive_losses: consecLosses
+      })
+      console.log(`[RESOLVE] Resolved ${pendingTrades.length} trades — PnL: \${${totalPnl.toFixed(2)}}`)
+    }
+  } catch (err) {
+    console.warn('[RESOLVE] Error:', err)
+  }
+}
+
 // ── Circuit breakers ─────────────────────────────────────────
 async function checkCircuitBreakers(): Promise<boolean> {
   const st = await db.getBotState() as Record<string, unknown>
@@ -383,6 +495,8 @@ async function runOrchestrator(): Promise<void> {
     if (await checkCircuitBreakers()) return
     const botState = await db.getBotState() as Record<string, unknown>
     if (!botState.running) { console.log('[AURELIA] Paused'); return }
+    // Resolve pending paper trades before running new cycle
+    await resolvePaperTrades()
     const [candles, btcPrice] = await Promise.all([
       fetchBtcCandles(30).catch(() => []),
       fetchBtcPrice().catch(() => 0)
