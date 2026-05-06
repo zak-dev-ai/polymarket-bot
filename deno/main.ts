@@ -366,22 +366,29 @@ let lastBtcPrice = 0
 
 async function resolvePaperTrades(): Promise<void> {
   try {
+    // Debug: log that resolve is running
+    console.log('[RESOLVE] resolvePaperTrades() called')
+
     // Get BTC price now and get pending trades from DB
     let currentBtc = await fetchBtcPrice().catch(() => 0)
     if (currentBtc > 0) lastBtcPrice = currentBtc
     else if (lastBtcPrice > 0) currentBtc = lastBtcPrice
-    else return  // no price data yet
+    else { console.log('[RESOLVE] No BTC price'); return }
 
-    // Fetch all unresolved paper trades via the db module
-    // We fetch by querying trades with status='paper' — db module doesn't have a query function,
-    // so use raw REST
     // Use db module's getPendingTrades (uses same working env vars as other db calls)
-    const pendingTrades = await db.getPendingTrades().catch(err => {
-      console.log('[RESOLVE] Error fetching trades:', err.message)
-      return []
-    })
+    let pendingTrades: Array<Record<string, unknown>> = []
+    try {
+      pendingTrades = await db.getPendingTrades()
+    } catch (err) {
+      const errMsg = String(err)
+      console.log('[RESOLVE] Error fetching trades:', errMsg)
+      await db.insertAlert('warning', 'resolve', 'getPendingTrades failed: ' + errMsg.slice(0, 60))
+      return
+    }
     console.log('[RESOLVE] Found', pendingTrades.length, 'pending trades')
-    if (pendingTrades.length === 0) return
+    if (pendingTrades.length === 0) {
+      return
+    }
 
     const now = Date.now()
     const botState = await db.getBotState() as Record<string, unknown>
