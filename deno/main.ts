@@ -218,6 +218,10 @@ const PCS_CONTRACTS = {
 let binanceLivePrice = 0
 let lastPhantomTrade = 0
 
+// BSC wallet (for PHANTOM live trading) — uses _ZAK suffix
+const BSC_WALLET = Deno.env.get('BNB_ADDRESS_ZAK') ?? ''
+const BSC_PRIVATE_KEY = Deno.env.get('BNB_PRIVATE_KEY_ZAK') ?? ''
+
 // Poll BNB price via REST instead of WebSocket (more reliable from Deno Deploy)
 async function pollBnbPrice() {
   try {
