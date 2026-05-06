@@ -289,7 +289,7 @@ async function runPhantom(): Promise<void> {
     if (!side) continue
     const bankroll = ((await db.getBotState()) as Record<string, unknown>).current_bankroll as number ?? 30
     const bnbPrice = binanceLivePrice || 600
-    const sizeUsdc = 0.02 * bnbPrice
+    const sizeUsdc = Math.min(0.02 * bnbPrice, 7.5)
     if (!bestSignal || payout > bestSignal.payout) bestSignal = { asset: asset.name, side, payout, edgeType, sizeUsdc }
 
     await db.insertSignal({
