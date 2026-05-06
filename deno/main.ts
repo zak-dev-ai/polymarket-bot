@@ -362,19 +362,35 @@ async function runAIEvaluation(): Promise<void> {
 
 // ── Trade resolution ─────────────────────────────────────────
 // Resolves pending paper trades by checking actual market movement
+let lastBtcPrice = 0
+
 async function resolvePaperTrades(): Promise<void> {
   try {
-    // Fetch all unresolved paper trades
+    // Get BTC price now and get pending trades from DB
+    let currentBtc = await fetchBtcPrice().catch(() => 0)
+    if (currentBtc > 0) lastBtcPrice = currentBtc
+    else if (lastBtcPrice > 0) currentBtc = lastBtcPrice
+    else return  // no price data yet
+
+    // Fetch all unresolved paper trades via the db module
+    // We fetch by querying trades with status='paper' — db module doesn't have a query function,
+    // so use raw REST
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    if (!supabaseUrl || !anonKey) return
+
     const res = await fetch(
-      SUPABASE_URL + '/rest/v1/trades?status=eq.paper&select=id,market_id,side,size_usdc,notes,ts&order=ts.asc',
-      { headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY } }
+      supabaseUrl + '/rest/v1/trades?status=eq.paper&select=id,market_id,side,size_usdc,notes,ts&order=ts.asc',
+      { headers: { apikey: anonKey, Authorization: 'Bearer ' + anonKey } }
     )
     if (!res.ok) return
     const pendingTrades = await res.json() as Array<Record<string, unknown>>
-    if (!Array.isArray(pendingTrades) || pendingTrades.length === 0) return
+    if (!Array.isArray(pendingTrades) || pendingTrades.length === 0) {
+      console.log('[RESOLVE] No pending trades to resolve')
+      return
+    }
 
     const now = Date.now()
-    const currentBtc = await fetchBtcPrice().catch(() => 0)
     const botState = await db.getBotState() as Record<string, unknown>
     let bankroll = (botState.current_bankroll as number) ?? 30
     let totalPnl = (botState.total_pnl as number) ?? 0
@@ -383,61 +399,55 @@ async function resolvePaperTrades(): Promise<void> {
     let consecWins = (botState.consecutive_wins as number) ?? 0
     let consecLosses = (botState.consecutive_losses as number) ?? 0
     let totalTrades = (botState.total_trades as number) ?? 0
+    let resolvedCount = 0
 
     for (const trade of pendingTrades) {
       const tradeTs = new Date(trade.ts as string).getTime()
       const ageMin = (now - tradeTs) / 60000
+
+      // Only resolve trades older than 6 min
+      if (ageMin < 6) { console.log(`[RESOLVE] Skipping trade ${trade.id} — only ${ageMin.toFixed(0)}m old`); continue }
+
       const marketId = trade.market_id as string
       const side = trade.side as string
       const size = trade.size_usdc as number
       const notes = trade.notes as string
-
-      // Only resolve trades older than 6 min (1 min buffer after 5-min PCS round)
-      if (ageMin < 6) continue
-
-      // Determine direction from the trade (YES=UP, NO=DOWN)
       const direction = side === 'YES' ? 'UP' : 'DOWN'
 
-      // Fetch BTC price at trade time (approximate from recent candles)
-      // For simplicity: compare current BTC price to price at placement
-      let won = false
-      let payout = 0
-
-      if (marketId === 'BNBUSD-PCS' || marketId === 'SWARM-CONSENSUS') {
-        // For SWARM trades: check BTC movement direction
-        // We store a simulated outcome: fetch a snapshot from 6 min ago
-        const btcPriceAtTrade = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=6&endTime=' + tradeTs)
-          .then(r => r.json())
-          .then(d => parseFloat(d?.[0]?.[4] ?? '0'))
-          .catch(() => 0)
-        
-        if (btcPriceAtTrade > 0 && currentBtc > 0) {
-          const btcMove = (currentBtc - btcPriceAtTrade) / btcPriceAtTrade
-          const movedUp = btcMove > 0.001  // >0.1% up
-          const movedDown = btcMove < -0.001  // >0.1% down
-          
-          if (direction === 'UP' && movedUp) { won = true; payout = 1.9 }
-          else if (direction === 'DOWN' && movedDown) { won = true; payout = 1.9 }
-          else if ((direction === 'UP' && movedDown) || (direction === 'DOWN' && movedUp)) { won = false; payout = 0 }
-          else { won = false; payout = 0 }  // flat → loss
-        }
-      } else if (marketId === 'BNBUSD' || marketId === 'BTCUSD' || marketId === 'BTCUSD-PCS' || marketId === 'ETHUSD-PCS') {
-        // For PHANTOM/prophet trades: use payout from notes
-        const payoutMatch = notes.match(/([\d.]+)x/)
-        payout = payoutMatch ? parseFloat(payoutMatch[1]) : 0
-        const btcPriceAtTrade = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=6&endTime=' + tradeTs)
-          .then(r => r.json())
-          .then(d => parseFloat(d?.[0]?.[4] ?? '0'))
-          .catch(() => 0)
-        if (btcPriceAtTrade > 0 && currentBtc > 0) {
-          const btcMove = (currentBtc - btcPriceAtTrade) / btcPriceAtTrade
-          if (direction === 'UP' && btcMove > 0.001) { won = true }
-          else if (direction === 'DOWN' && btcMove < -0.001) { won = true }
-          else { won = false }
-        }
+      // Fetch a 1-min candle around the trade time to get open/close
+      const klines = await fetch(
+        'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=1&endTime=' + (tradeTs + 300000)
+      ).then(r => r.json()).catch(() => [])
+      
+      const candle = Array.isArray(klines) && klines.length > 0 ? klines[0] : null
+      
+      if (!candle) {
+        // Fallback: compare trade-time BTC to current BTC
+        console.log(`[RESOLVE] No kline for trade ${trade.id}, using current price compare`)
+        continue  // skip for now, will get resolved next cycle
       }
 
-      if (payout <= 0) payout = 1.9  // default payout if not found
+      const priceAtOpen = parseFloat(candle[1])  // open price
+      const priceAtClose = parseFloat(candle[4]) // close price
+      const btcMove = (priceAtClose - priceAtOpen) / priceAtOpen
+      const movedUp = btcMove > 0.0005   // 0.05% move needed
+      const movedDown = btcMove < -0.0005
+
+      let won = false
+      let payout = 1.9  // default 1.9x for simulation
+
+      if (direction === 'UP' && movedUp) { won = true }
+      else if (direction === 'DOWN' && movedDown) { won = true }
+      else if (btcMove < 0.0005 && btcMove > -0.0005) {
+        // Flat market — skip resolution (push to next cycle)
+        console.log(`[RESOLVE] Trade ${trade.id} in flat market, deferring`)
+        continue
+      }
+
+      // Extract payout from notes if available
+      const payoutMatch = notes.match(/([\d.]+)x/)
+      if (payoutMatch) payout = parseFloat(payoutMatch[1])
+      if (payout < 1.3) payout = 1.9
 
       const pnl = won ? size * (payout - 1) : -size
       totalPnl += pnl
@@ -445,17 +455,16 @@ async function resolvePaperTrades(): Promise<void> {
       totalTrades++
       if (won) { totalWins++; consecWins++; consecLosses = 0 }
       else { totalLosses++; consecLosses++; consecWins = 0 }
+      resolvedCount++
 
-      // Update the trade record
-      const status = won ? 'filled' : 'failed'
-      await fetch(SUPABASE_URL + '/rest/v1/trades?id=eq.' + trade.id, {
-        method: 'PATCH',
-        headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, pnl })
+      // Update the trade via db module
+      await db.updateTrade(trade.id as number, {
+        status: won ? 'filled' : 'failed',
+        pnl
       }).catch(() => {})
     }
 
-    if (pendingTrades.length > 0) {
+    if (resolvedCount > 0) {
       await db.updateBotState({
         current_bankroll: bankroll,
         total_pnl: totalPnl,
@@ -465,7 +474,7 @@ async function resolvePaperTrades(): Promise<void> {
         consecutive_wins: consecWins,
         consecutive_losses: consecLosses
       })
-      console.log(`[RESOLVE] Resolved ${pendingTrades.length} trades — PnL: \${${totalPnl.toFixed(2)}}`)
+      console.log(`[RESOLVE] Resolved ${resolvedCount}/${pendingTrades.length} trades — PnL: \$${totalPnl.toFixed(2)} | W/L: ${totalWins}/${totalLosses}`)
     }
   } catch (err) {
     console.warn('[RESOLVE] Error:', err)
