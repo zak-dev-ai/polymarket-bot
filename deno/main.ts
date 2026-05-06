@@ -375,35 +375,13 @@ async function resolvePaperTrades(): Promise<void> {
     // Fetch all unresolved paper trades via the db module
     // We fetch by querying trades with status='paper' — db module doesn't have a query function,
     // so use raw REST
-    // Use DB module's existing functions — query trade IDs from the stored bot state
-    // Since we don't have a getTrades function, we'll rely on the bot_state tracking
-    // and resolve by checking all trades in the last 24h
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_KEY') ?? ''
-    if (!supabaseUrl || !serviceKey) {
-      console.log('[RESOLVE] Missing env vars')
-      return
-    }
-
-    // Use proper URL construction like supabase_client does
-    const tradesUrl = new URL(`${supabaseUrl}/rest/v1/trades`)
-    tradesUrl.searchParams.set('status', 'eq.paper')
-    tradesUrl.searchParams.set('select', 'id,market_id,side,size_usdc,notes,ts')
-    tradesUrl.searchParams.set('order', 'ts.asc')
-    tradesUrl.searchParams.set('limit', '50')
-
-    const res = await fetch(tradesUrl.toString(), {
-      headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey }
+    // Use db module's getPendingTrades (uses same working env vars as other db calls)
+    const pendingTrades = await db.getPendingTrades().catch(err => {
+      console.log('[RESOLVE] Error fetching trades:', err.message)
+      return []
     })
-    if (!res.ok) {
-      console.log('[RESOLVE] Failed to fetch trades:', res.status, await res.text().catch(()=>''))
-      return
-    }
-    const pendingTrades = await res.json() as Array<Record<string, unknown>>
     console.log('[RESOLVE] Found', pendingTrades.length, 'pending trades')
-    if (!Array.isArray(pendingTrades) || pendingTrades.length === 0) {
-      return
-    }
+    if (pendingTrades.length === 0) return
 
     const now = Date.now()
     const botState = await db.getBotState() as Record<string, unknown>

@@ -86,6 +86,22 @@ export async function updateTrade(
   if (!res.ok) throw new Error(`Supabase PATCH trades: ${res.status} — ${await res.text()}`)
 }
 
+// ── Trade resolution helpers ──────────────────────────────
+
+export async function getPendingTrades(): Promise<Array<Record<string, unknown>>> {
+  const url = new URL(`${SUPABASE_URL}/rest/v1/trades`)
+  url.searchParams.set('status', 'eq.paper')
+  url.searchParams.set('select', 'id,market_id,side,size_usdc,notes,ts')
+  url.searchParams.set('order', 'ts.asc')
+  url.searchParams.set('limit', '50')
+  const res = await fetch(url.toString(), {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  })
+  if (!res.ok) throw new Error(`Supabase GET trades: ${res.status}`)
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
 // ── Bot state ────────────────────────────────────────────────
 
 export async function getBotState(): Promise<Record<string, unknown>> {
