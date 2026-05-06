@@ -1,12 +1,16 @@
 // ============================================================
-// POLYMARKET CLIENT
-// Handles: wallet setup, API key generation, market data,
-// order placement, order status
+// POLYMARKET CLIENT — FIXED v2
+// Major fixes:
+//   1. Env vars use _ZAK suffix (Zak's naming convention)
+//   2. Real EIP-712 signing via npm:ethers (no more '0x' placeholder)
+//   3. P&L write-back on order fill
+//   4. Proper error handling
 // ============================================================
-// Uses Polymarket CLOB REST API — no npm needed in Deno
+import { Wallet } from 'npm:ethers@6'
 
 const CLOB_BASE = 'https://clob.polymarket.com'
 const GAMMA_BASE = 'https://gamma-api.polymarket.com'
+const CTF_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E'
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -28,7 +32,7 @@ export interface MarketInfo {
   conditionId: string
   question: string
   endDateIso: string
-  yesToken: string         // ERC1155 token ID for YES
+  yesToken: string
   noToken: string
   yesPrice: number
   noPrice: number
@@ -36,29 +40,72 @@ export interface MarketInfo {
   active: boolean
 }
 
-// ── Config (loaded from Deno env) ───────────────────────────
+// ── Config (loaded from Deno env — _ZAK suffix) ────────────
 
 function getConfig() {
   return {
-    privateKey: Deno.env.get('POLY_PRIVATE_KEY') ?? '',
-    apiKey: Deno.env.get('POLY_API_KEY') ?? '',
-    apiSecret: Deno.env.get('POLY_API_SECRET') ?? '',
-    apiPassphrase: Deno.env.get('POLY_API_PASSPHRASE') ?? '',
+    privateKey: Deno.env.get('POLY_PRIVATE_KEY_ZAK') ?? '',
+    apiKey: Deno.env.get('POLY_API_KEY_ZAK') ?? '',
+    apiSecret: Deno.env.get('POLY_API_SECRET_ZAK') ?? '',
+    apiPassphrase: Deno.env.get('POLY_API_PASSPHRASE_ZAK') ?? '',
+    address: Deno.env.get('POLY_ADDRESS_ZAK') ?? '',
     chainId: 137, // Polygon mainnet
   }
 }
 
-// ── Request signing (L1 auth for order placement) ───────────
-// Polymarket uses EIP-712 signing. For now we use the API key
-// (L2 auth) which is simpler and sufficient for CLOB orders.
+// ── EIP-712 domain & types (Polymarket CLOB order spec) ─────
+
+const EIP712_DOMAIN = {
+  name: 'CTF Exchange',
+  version: '1',
+  chainId: 137,
+  verifyingContract: CTF_EXCHANGE,
+}
+
+const ORDER_TYPES = {
+  Order: [
+    { name: 'salt', type: 'uint256' },
+    { name: 'maker', type: 'address' },
+    { name: 'signer', type: 'address' },
+    { name: 'taker', type: 'address' },
+    { name: 'tokenId', type: 'uint256' },
+    { name: 'makerAmount', type: 'uint256' },
+    { name: 'takerAmount', type: 'uint256' },
+    { name: 'expiration', type: 'uint256' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'feeRateBps', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
+    { name: 'signatureType', type: 'uint256' },
+  ],
+}
+
+/**
+ * Generate EIP-712 typed data signature for a Polymarket CLOB order.
+ * Uses the private key from env vars to sign the order struct.
+ */
+async function signOrder(orderData: Record<string, unknown>): Promise<string> {
+  const cfg = getConfig()
+  if (!cfg.privateKey || cfg.privateKey === '0x') {
+    throw new Error('POLY_PRIVATE_KEY_ZAK not configured')
+  }
+
+  // Create a wallet from the private key
+  const wallet = new Wallet(cfg.privateKey)
+
+  // Sign the typed data (EIP-712)
+  const signature = await wallet.signTypedData(EIP712_DOMAIN, ORDER_TYPES, orderData)
+  return signature
+}
+
+// ── Request signing (L1 + L2 auth) ──────────────────────────
 
 async function clobGet(path: string): Promise<unknown> {
   const cfg = getConfig()
   const url = `${CLOB_BASE}${path}`
   const res = await fetch(url, {
     headers: {
-      'POLY_ADDRESS': cfg.apiKey,     // wallet address used as key
-      'POLY_SIGNATURE': '',           // L1 not needed for reads
+      'POLY_ADDRESS': cfg.address || cfg.apiKey,
+      'POLY_SIGNATURE': '',
       'POLY_TIMESTAMP': Date.now().toString(),
       'POLY_NONCE': '0',
       'Content-Type': 'application/json',
@@ -73,7 +120,7 @@ async function clobPost(path: string, body: unknown): Promise<unknown> {
   const url = `${CLOB_BASE}${path}`
   const timestamp = Math.floor(Date.now() / 1000).toString()
 
-  // Build the L2 HMAC signature required for order placement
+  // L2 HMAC signature for API auth
   const message = timestamp + 'POST' + path + JSON.stringify(body)
   const key = await crypto.subtle.importKey(
     'raw',
@@ -88,7 +135,7 @@ async function clobPost(path: string, body: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'POLY_ADDRESS': cfg.apiKey,
+      'POLY_ADDRESS': cfg.address || cfg.apiKey,
       'POLY_SIGNATURE': sigB64,
       'POLY_TIMESTAMP': timestamp,
       'POLY_NONCE': '0',
@@ -118,7 +165,6 @@ export async function fetchBtcMarkets(): Promise<MarketInfo[]> {
     closed: boolean
   }>
 
-  // Filter for 5-min BTC up/down markets
   return data
     .filter(m =>
       !m.closed &&
@@ -177,19 +223,19 @@ export async function fetchOrderStatus(orderId: string): Promise<{
   }
 }
 
-// ── Order placement ──────────────────────────────────────────
+// ── Order placement (with real EIP-712 signing) ─────────────
 
 /**
- * Place a limit order on Polymarket CLOB.
- *
- * IMPORTANT: Polymarket orders are placed in USDC on Polygon.
- * You must have USDC approved for the CTF Exchange contract.
- * The side maps: YES = buy YES token, NO = buy NO token.
+ * Place a limit order on Polymarket CLOB with proper EIP-712 signing.
+ * Requires POLY_PRIVATE_KEY_ZAK env var for signing.
  */
 export async function placeOrder(order: PolyOrder): Promise<OrderResult> {
   const cfg = getConfig()
   if (!cfg.apiKey || !cfg.apiSecret) {
     return { success: false, error: 'API credentials not configured' }
+  }
+  if (!cfg.privateKey || cfg.privateKey === '0x') {
+    return { success: false, error: 'POLY_PRIVATE_KEY_ZAK not configured — signing impossible' }
   }
 
   try {
@@ -199,26 +245,37 @@ export async function placeOrder(order: PolyOrder): Promise<OrderResult> {
     if (!market) return { success: false, error: `Market ${order.marketId} not found` }
 
     const tokenId = order.side === 'YES' ? market.yesToken : market.noToken
+    const makerAmount = Math.floor(order.sizeUsdc * 1_000_000).toString()
+    const takerAmount = Math.floor(order.sizeUsdc / order.price * 1_000_000).toString()
+
+    // EIP-712 order data (matches Polymarket CLOB Order struct)
+    const orderData = {
+      salt: Date.now().toString(),
+      maker: cfg.address || cfg.apiKey,
+      signer: cfg.address || cfg.apiKey,
+      taker: '0x0000000000000000000000000000000000000000',
+      tokenId,
+      makerAmount,
+      takerAmount,
+      expiration: '0',
+      nonce: '0',
+      feeRateBps: '0',
+      side: 0, // BUY
+      signatureType: 0,
+    }
+
+    // Generate real EIP-712 signature
+    const signature = await signOrder(orderData)
 
     // Build CLOB order payload
     const payload = {
       order: {
-        salt: Date.now(),
-        maker: cfg.apiKey,
-        signer: cfg.apiKey,
-        taker: '0x0000000000000000000000000000000000000000',
-        tokenId,
-        makerAmount: Math.floor(order.sizeUsdc * 1_000_000).toString(), // USDC has 6 decimals
-        takerAmount: Math.floor(order.sizeUsdc / order.price * 1_000_000).toString(),
-        expiration: '0',
-        nonce: '0',
-        feeRateBps: '0',
-        side: 'BUY',
+        ...orderData,
         signatureType: 0,
-        signature: '0x' // Will be populated properly after wallet integration
+        signature,
       },
-      owner: cfg.apiKey,
-      orderType: 'GTC'  // Good Till Cancelled
+      owner: cfg.address || cfg.apiKey,
+      orderType: 'GTC'
     }
 
     const result = await clobPost('/order', payload) as { orderID?: string; errorMsg?: string }

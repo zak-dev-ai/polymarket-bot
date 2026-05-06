@@ -375,6 +375,73 @@ async function runAIEvaluation(): Promise<void> {
 //  7. Robust BTC kline fetch with fallback
 // ============================================================
 
+// ── Check real Polymarket orders for fills & update P&L ──
+// Only active when real orders are placed (uses polymarket_client)
+async function checkPendingOrders(): Promise<void> {
+  try {
+    // Fetch open orders from Polymarket CLOB
+    const openOrders = await poly.fetchOpenOrders() as Array<Record<string, unknown>>
+    if (!Array.isArray(openOrders) || openOrders.length === 0) return
+
+    let stateChanged = false
+    const botState = await db.getBotState() as Record<string, unknown>
+    let bankroll = (botState.current_bankroll as number) ?? 30
+    let totalPnl = (botState.total_pnl as number) ?? 0
+    let totalWins = (botState.total_wins as number) ?? 0
+    let totalLosses = (botState.total_losses as number) ?? 0
+    let consecWins = (botState.consecutive_wins as number) ?? 0
+    let consecLosses = (botState.consecutive_losses as number) ?? 0
+    let totalTrades = (botState.total_trades as number) ?? 0
+
+    for (const order of openOrders) {
+      const orderId = order.id as string
+      const status = await poly.fetchOrderStatus(orderId)
+      if (status.status !== 'FILLED' && status.status !== 'MATCHED') continue
+
+      // Order was filled — calculate P&L
+      const sizeUsdc = parseFloat((order.size_usdc as string) ?? '0')
+      const price = parseFloat((order.price as string) ?? '0')
+      const side = order.side as string
+      const filledPrice = status.filledPrice ?? price
+
+      if (sizeUsdc <= 0 || filledPrice <= 0) continue
+
+      // Polymarket: bet YES at price P → if YES wins, payout = 1/P - 1
+      // Simplified: we bet sizeUsdc, if YES wins we get sizeUsdc * (1/price)
+      const won = (side === 'YES' && filledPrice > 0.5) || (side === 'NO' && filledPrice < 0.5)
+      const pnl = won ? sizeUsdc * ((1 / filledPrice) - 1) : -sizeUsdc
+
+      bankroll += pnl
+      totalPnl += pnl
+      totalTrades++
+      if (won) { totalWins++; consecWins++; consecLosses = 0 }
+      else { totalLosses++; consecLosses++; consecWins = 0 }
+      stateChanged = true
+
+      await db.updateTrade(order.id as number, {
+        status: 'filled',
+        pnl,
+        filled_price: filledPrice,
+        resolved_at: new Date().toISOString(),
+      }).catch(() => {})
+    }
+
+    if (stateChanged) {
+      await db.updateBotState({
+        current_bankroll: bankroll,
+        total_pnl: totalPnl,
+        total_trades: totalTrades,
+        total_wins: totalWins,
+        total_losses: totalLosses,
+        consecutive_wins: consecWins,
+        consecutive_losses: consecLosses,
+      })
+    }
+  } catch (err) {
+    console.warn('[CHECK-ORDERS] Error:', String(err))
+  }
+}
+
 // ── Trade resolution ─────────────────────────────────────────
 let lastBtcPrice = 0
 
@@ -572,8 +639,9 @@ async function runOrchestrator(): Promise<void> {
     if (await checkCircuitBreakers()) return
     const botState = await db.getBotState() as Record<string, unknown>
     if (!botState.running) { console.log('[AURELIA] Paused'); return }
-    // Resolve pending paper trades before running new cycle
+    // Resolve pending paper trades & check real orders
     await resolvePaperTrades()
+    await checkPendingOrders()
     const [candles, btcPrice] = await Promise.all([
       fetchBtcCandles(30).catch(() => []),
       fetchBtcPrice().catch(() => 0)
