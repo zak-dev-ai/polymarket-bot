@@ -376,12 +376,15 @@ async function resolvePaperTrades(): Promise<void> {
     // We fetch by querying trades with status='paper' — db module doesn't have a query function,
     // so use raw REST
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
-    if (!supabaseUrl || !anonKey) return
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_KEY') ?? ''
+    if (!supabaseUrl || !serviceKey) {
+      console.log('[RESOLVE] Missing env vars for DB connection')
+      return
+    }
 
     const res = await fetch(
-      supabaseUrl + '/rest/v1/trades?status=eq.paper&select=id,market_id,side,size_usdc,notes,ts&order=ts.asc',
-      { headers: { apikey: anonKey, Authorization: 'Bearer ' + anonKey } }
+      supabaseUrl + '/rest/v1/trades?status=eq.paper&select=id,market_id,side,size_usdc,notes,ts&order=ts.asc&limit=50',
+      { headers: { apikey: serviceKey, Authorization: 'Bearer ' + serviceKey } }
     )
     if (!res.ok) return
     const pendingTrades = await res.json() as Array<Record<string, unknown>>
