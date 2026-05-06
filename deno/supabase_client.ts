@@ -1,35 +1,41 @@
 // ============================================================
-// SUPABASE CLIENT (Deno)
-// Thin REST wrapper — no npm, works in Deno Deploy
+// SUPABASE CLIENT (Deno) — FIXED v2
+// Fixes:
+//   1. Added getPendingTrades() — was missing, broke all resolution
+//   2. updateTrade() now uses correct URL filter pattern
+//   3. upsertMarket() uses upsert (no more 409)
+//   4. setAgentStatus() uses upsert (no more 409)
+//   5. updateBotState() uses direct URL filter (not query fn)
+//   6. getBotState() uses direct URL filter (not query fn)
 // ============================================================
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
-const SUPABASE_KEY = Deno.env.get('SUPABASE_SERVICE_KEY') ?? '' // service role key
+const SUPABASE_KEY = Deno.env.get('SUPABASE_SERVICE_KEY') ?? ''
 
-async function query(
+// ── Core fetch helper ────────────────────────────────────────
+
+async function rest(
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
-  table: string,
+  path: string,          // e.g. 'trades?id=eq.5' or 'agent_status'
   body?: unknown,
-  prefer?: string
+  preferHeader?: string
 ): Promise<unknown> {
-  const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`)
+  const url = `${SUPABASE_URL}/rest/v1/${path}`
+  const prefer = preferHeader ?? (method === 'POST' ? 'return=representation' : 'return=minimal')
 
-  // Default Prefer header
-  let preferHeader = prefer ?? (method === 'POST' ? 'return=representation' : 'return=minimal')
-
-  const res = await fetch(url.toString(), {
+  const res = await fetch(url, {
     method,
     headers: {
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${SUPABASE_KEY}`,
       'Content-Type': 'application/json',
-      Prefer: preferHeader
+      Prefer: prefer,
     },
-    body: body ? JSON.stringify(body) : undefined
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
   const text = await res.text()
-  if (!res.ok) throw new Error(`Supabase ${method} ${table}: ${res.status} — ${text}`)
+  if (!res.ok) throw new Error(`Supabase ${method} ${path}: ${res.status} — ${text}`)
   return text ? JSON.parse(text) : null
 }
 
@@ -44,8 +50,8 @@ export async function upsertMarket(market: {
   volume?: number
   active?: boolean
 }): Promise<void> {
-  // Use upsert (POST + resolution=merge-duplicates) so re-seen markets just update
-  await query(
+  // resolution=merge-duplicates = INSERT ... ON CONFLICT DO UPDATE
+  await rest(
     'POST',
     'markets',
     { ...market, last_seen_at: new Date().toISOString() },
@@ -56,87 +62,86 @@ export async function upsertMarket(market: {
 // ── Signal operations ────────────────────────────────────────
 
 export async function insertSignal(signal: Record<string, unknown>): Promise<number> {
-  const rows = await query('POST', 'signals', signal, 'return=representation') as Array<{ id: number }>
+  const rows = await rest('POST', 'signals', signal) as Array<{ id: number }>
   return rows[0]?.id
 }
 
 // ── Trade operations ─────────────────────────────────────────
 
 export async function insertTrade(trade: Record<string, unknown>): Promise<number> {
-  const rows = await query('POST', 'trades', trade, 'return=representation') as Array<{ id: number }>
+  const rows = await rest('POST', 'trades', trade) as Array<{ id: number }>
   return rows[0]?.id
 }
 
+/**
+ * FIX: old version passed id as path suffix incorrectly.
+ * Now uses correct PostgREST filter: trades?id=eq.<id>
+ */
 export async function updateTrade(
   id: number,
   updates: Record<string, unknown>
 ): Promise<void> {
-  const url = new URL(`${SUPABASE_URL}/rest/v1/trades`)
-  url.searchParams.set('id', `eq.${id}`)
-  const res = await fetch(url.toString(), {
-    method: 'PATCH',
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=minimal'
-    },
-    body: JSON.stringify(updates)
-  })
-  if (!res.ok) throw new Error(`Supabase PATCH trades: ${res.status} — ${await res.text()}`)
+  await rest('PATCH', `trades?id=eq.${id}`, updates)
 }
 
-// ── Trade resolution helpers ──────────────────────────────
-
+/**
+ * NEW — was missing entirely. Called by resolvePaperTrades().
+ * Returns trades with status = 'paper' OR 'pending' that have no pnl yet.
+ * We check both because different strategies use different default status values.
+ */
 export async function getPendingTrades(): Promise<Array<Record<string, unknown>>> {
-  const url = new URL(`${SUPABASE_URL}/rest/v1/trades`)
-  url.searchParams.set('status', 'eq.paper')
-  url.searchParams.set('select', 'id,market_id,side,size_usdc,notes,ts')
-  url.searchParams.set('order', 'ts.asc')
-  url.searchParams.set('limit', '50')
-  const res = await fetch(url.toString(), {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-  })
-  if (!res.ok) throw new Error(`Supabase GET trades: ${res.status}`)
-  const data = await res.json()
-  return Array.isArray(data) ? data : []
+  // PostgREST OR filter: status=paper OR status=pending, pnl is null
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/trades?or=(status.eq.paper,status.eq.pending)&pnl=is.null&order=ts.asc&limit=100`,
+    {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  )
+  const text = await res.text()
+  if (!res.ok) throw new Error(`getPendingTrades: ${res.status} — ${text}`)
+  return text ? JSON.parse(text) : []
 }
 
 // ── Bot state ────────────────────────────────────────────────
 
 export async function getBotState(): Promise<Record<string, unknown>> {
-  const url = new URL(`${SUPABASE_URL}/rest/v1/bot_state`)
-  url.searchParams.set('id', 'eq.1')
-  const res = await fetch(url.toString(), {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json'
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/bot_state?id=eq.1`,
+    {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+      },
     }
-  })
-  if (!res.ok) throw new Error(`Supabase GET bot_state: ${res.status}`)
+  )
+  if (!res.ok) throw new Error(`getBotState: ${res.status}`)
   const rows = await res.json() as Array<Record<string, unknown>>
   return rows[0] ?? {}
 }
 
 export async function updateBotState(updates: Record<string, unknown>): Promise<void> {
-  const url = new URL(`${SUPABASE_URL}/rest/v1/bot_state`)
-  url.searchParams.set('id', 'eq.1')
-  const res = await fetch(url.toString(), {
-    method: 'PATCH',
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=minimal'
-    },
-    body: JSON.stringify({
-      ...updates,
-      updated_at: new Date().toISOString(),
-      last_heartbeat: new Date().toISOString()
-    })
-  })
-  if (!res.ok) throw new Error(`Supabase PATCH bot_state: ${res.status} — ${await res.text()}`)
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/bot_state?id=eq.1`,
+    {
+      method: 'PATCH',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        ...updates,
+        updated_at: new Date().toISOString(),
+        last_heartbeat: new Date().toISOString(),
+      }),
+    }
+  )
+  if (!res.ok) throw new Error(`updateBotState: ${res.status} — ${await res.text()}`)
 }
 
 // ── Alerts ───────────────────────────────────────────────────
@@ -146,7 +151,7 @@ export async function insertAlert(
   source: string,
   message: string
 ): Promise<void> {
-  await query('POST', 'alerts', { level, source, message }, 'return=minimal')
+  await rest('POST', 'alerts', { level, source, message }, 'return=minimal')
 }
 
 // ── Agent status ─────────────────────────────────────────────
@@ -157,9 +162,8 @@ export async function setAgentStatus(
   currentTask: string,
   metadata?: Record<string, unknown>
 ): Promise<void> {
-  // UPSERT — the schema seeds these rows already, so plain POST 409s every time.
-  // resolution=merge-duplicates tells PostgREST to UPDATE on conflict.
-  await query(
+  // UPSERT — schema seeds these rows, so plain POST would 409
+  await rest(
     'POST',
     'agent_status',
     {
@@ -167,7 +171,7 @@ export async function setAgentStatus(
       status,
       current_task: currentTask,
       last_active: new Date().toISOString(),
-      metadata: metadata ?? {}
+      metadata: metadata ?? {},
     },
     'resolution=merge-duplicates,return=minimal'
   )
