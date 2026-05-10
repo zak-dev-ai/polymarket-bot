@@ -1,11 +1,9 @@
 node_modules/
 .next/
 .env
+.env.local
 *.log
 logs/
-
-# wrangler files
 .wrangler
 .dev.vars*
-!.dev.vars.example
-!.env.example
+test_trade.js
